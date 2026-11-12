@@ -8,6 +8,7 @@ import { registerTreasuryRoutes } from "./routes/treasury-routes.js";
 import { registerWorkflowRoutes } from "./routes/workflow-routes.js";
 import { registerPaymentRoutes } from "./routes/payment-routes.js";
 import { registerReportingRoutes } from "./routes/reporting-routes.js";
+import { registerIntegrationRoutes } from "./routes/integration-routes.js";
 
 export function buildApp(): FastifyInstance {
   const app = Fastify({ logger: false });
@@ -48,6 +49,7 @@ export function buildApp(): FastifyInstance {
   registerWorkflowRoutes(app);
   registerPaymentRoutes(app);
   registerReportingRoutes(app);
+  registerIntegrationRoutes(app);
 
   return app;
 }

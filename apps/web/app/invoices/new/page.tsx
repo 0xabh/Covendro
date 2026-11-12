@@ -56,8 +56,15 @@ export default function NewInvoicePage() {
   useEffect(() => {
     fetch(`${apiBase}/api/invoices/fixtures`)
       .then((response) => response.json())
-      .then((result) => setFixtures(result.data ?? []))
+      .then((result) => { setFixtures(result.data ?? []); })
       .catch(() => setFixtures([]));
+  }, []);
+
+  useEffect(() => {
+    const fixtureName = new URLSearchParams(window.location.search).get("fixture");
+    if (!fixtureName) return;
+    void loadFixture(fixtureName);
+    // The scenario links intentionally load only fictional fixture JSON.
   }, []);
 
   function updateField(field: keyof InvoiceForm, value: string) {
