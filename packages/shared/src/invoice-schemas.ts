@@ -31,7 +31,7 @@ export const invoiceInputSchema = z.object({
   invoiceNumber: z.string().trim().min(1, "Invoice number is required").max(120),
   invoiceDate: dateString,
   dueDate: dateString.optional(),
-  currency: z.enum(supportedCurrencies, { errorMap: () => ({ message: "Currency must be USDC or USDT" }) }),
+  currency: z.enum(supportedCurrencies, { message: "Currency must be USDC or USDT" }),
   amount: decimalString,
   lineItems: z.array(invoiceLineItemInputSchema).min(1, "At least one line item is required"),
   paymentDestination: z.string().trim().min(1, "Payment destination is required"),

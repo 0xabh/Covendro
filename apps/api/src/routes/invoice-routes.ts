@@ -37,7 +37,7 @@ function buildFileHash(content?: string) {
   return content ? createHash("sha256").update(content, "utf8").digest("hex") : undefined;
 }
 
-function validationDetails(error: { issues: Array<{ path: (string | number)[]; message: string }> }) {
+function validationDetails(error: { issues: Array<{ path: readonly PropertyKey[]; message: string }> }) {
   return error.issues.map((issue) => ({ path: issue.path.map(String), message: issue.message }));
 }
 

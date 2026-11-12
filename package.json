@@ -55,7 +55,13 @@
     "tsx": "^4.19.2",
     "typescript": "^5.7.2",
     "typescript-eslint": "^8.18.0",
-    "vitest": "^2.1.8"
+    "vite": "^8.3.8",
+    "vitest": "^5.1.0"
+  },
+  "overrides": {
+    "deepmerge-ts": "^8.0.0",
+    "minimatch": "^11.0.1",
+    "postcss": "^8.5.32"
   },
   "prisma": {
     "seed": "node --import tsx/esm prisma/seed.ts"

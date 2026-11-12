@@ -23,7 +23,7 @@ function idempotencyKey(request: { headers: Record<string, unknown> }) {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
 }
 
-function validationDetails(error: { issues: Array<{ path: (string | number)[]; message: string }> }) {
+function validationDetails(error: { issues: Array<{ path: readonly PropertyKey[]; message: string }> }) {
   return error.issues.map((issue) => ({ path: issue.path.map(String), message: issue.message }));
 }
 
