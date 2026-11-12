@@ -30,6 +30,12 @@ async function main() {
     });
   }
 
+  await prisma.treasuryIdentity.upsert({
+    where: { organizationId_nearAccountId: { organizationId: organization.id, nearAccountId: "treasury.covendro.testnet" } },
+    update: { name: "Covendro Demo Treasury Key", keyPurpose: "POLICY_APPROVAL_AND_RELAY", accessKeyPermissionScope: "Demo-only function-call metadata; no transfer authority", keyType: "FUNCTION_CALL", demoIdentity: true },
+    create: { organizationId: organization.id, name: "Covendro Demo Treasury Key", nearAccountId: "treasury.covendro.testnet", keyPurpose: "POLICY_APPROVAL_AND_RELAY", accessKeyPermissionScope: "Demo-only function-call metadata; no transfer authority", keyType: "FUNCTION_CALL", demoIdentity: true },
+  });
+
   const vendors = [
     {
       name: "Northstar Design Co.",
@@ -76,6 +82,7 @@ async function main() {
       requireApprovalAboveMinor: 100000,
       blockUnknownRecipients: true,
       warningsRequireManualReview: true,
+      allowSelfApproval: false,
       freezePayments: false,
       demoMode: true,
       active: true,
@@ -91,6 +98,7 @@ async function main() {
       requireApprovalAboveMinor: 100000,
       blockUnknownRecipients: true,
       warningsRequireManualReview: true,
+      allowSelfApproval: false,
       freezePayments: false,
       demoMode: true,
       active: true,

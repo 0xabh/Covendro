@@ -33,5 +33,6 @@ describe("seeded database", () => {
       freezePayments: false,
       allowedCurrenciesCsv: "USDC,USDT",
     });
+    expect((await prisma.treasuryIdentity.findFirst({ where: { organizationId: snapshot?.id } }))?.accessKeyPermissionScope).toContain("no transfer authority");
   });
 });

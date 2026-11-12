@@ -14,6 +14,7 @@ import { prisma } from "../db/prisma.js";
 import { ApiError } from "../errors.js";
 import { getDemoUser } from "../repositories/organization-repository.js";
 import { parseSourceDocument } from "../services/document-parser.js";
+import { analyzeInvoice } from "../services/ai/invoice-analysis-service.js";
 
 const fixturesDirectory = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../../fixtures");
 
@@ -175,9 +176,15 @@ export function registerInvoiceRoutes(app: FastifyInstance) {
     const user = await requireDemoUser(request);
     const invoice = await prisma.invoice.findFirst({
       where: { id: request.params.id, organizationId: user.organizationId },
-      include: { vendor: true, lineItems: true, createdBy: true, approvals: true, payment: true, auditEvents: { orderBy: { createdAt: "desc" } } },
+      include: { vendor: true, lineItems: true, createdBy: true, approvals: { orderBy: { createdAt: "desc" }, include: { reviewer: true } }, payment: true, auditEvents: { orderBy: { createdAt: "desc" } } },
     });
     if (!invoice) throw new ApiError(404, "INVOICE_NOT_FOUND", "Invoice was not found");
     return { data: invoice };
+  });
+
+  app.post<{ Params: { id: string } }>("/api/invoices/:id/analyze", async (request) => {
+    const user = await requireDemoUser(request);
+    const result = await analyzeInvoice(request.params.id, user.organizationId, request.id);
+    return { data: result };
   });
 }

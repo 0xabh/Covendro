@@ -19,6 +19,23 @@ model Organization {
   policies    TreasuryPolicy[]
   payments    Payment[]
   auditEvents AuditEvent[]
+  treasuryIdentities TreasuryIdentity[]
+}
+
+model TreasuryIdentity {
+  id                    String       @id @default(cuid())
+  organizationId        String
+  name                  String
+  nearAccountId         String
+  keyPurpose            String
+  accessKeyPermissionScope String
+  keyType               String       @default("FUNCTION_CALL")
+  demoIdentity          Boolean      @default(true)
+  createdAt             DateTime     @default(now())
+  organization          Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, nearAccountId])
+  @@index([organizationId, demoIdentity])
 }
 
 model User {
@@ -74,7 +91,18 @@ model Invoice {
   extractionProvider   String?
   extractionModel      String?
   extractionConfidence Float?
+  extractionRequestId  String?
+  analysisCompletedAt  DateTime?
   verificationState    String?
+  verificationExplanation String?
+  anomalyResultJson    String?
+  vendorRiskDecision   String?
+  vendorRiskReasonsJson String?
+  policyDecision       String?
+  policyReasonsJson    String?
+  requiredApprovals    Int?
+  policyVersion        Int?
+  approvalRound         Int              @default(1)
   createdAt            DateTime         @default(now())
   updatedAt            DateTime         @updatedAt
   organization         Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
@@ -113,6 +141,7 @@ model TreasuryPolicy {
   requireApprovalAboveMinor     Int
   blockUnknownRecipients        Boolean      @default(true)
   warningsRequireManualReview   Boolean      @default(true)
+  allowSelfApproval             Boolean      @default(false)
   freezePayments                Boolean      @default(false)
   demoMode                      Boolean      @default(true)
   active                        Boolean      @default(true)
@@ -129,11 +158,13 @@ model Approval {
   reviewerId String
   decision   String
   reason     String?
+  idempotencyKey String? @unique
+  approvalRound Int      @default(1)
   createdAt  DateTime @default(now())
   invoice    Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
   reviewer   User     @relation(fields: [reviewerId], references: [id])
 
-  @@unique([invoiceId, reviewerId])
+  @@unique([invoiceId, reviewerId, approvalRound])
   @@index([invoiceId, decision])
 }
 
@@ -144,6 +175,9 @@ model Payment {
   status                 String       @default("QUOTE_REQUESTED")
   rail                   String
   quoteId                String?
+  quoteMode              String?
+  providerStatus         String?
+  quoteRequestId         String?
   sourceAsset            String?
   destinationAsset       String?
   sourceChain            String?
@@ -153,6 +187,10 @@ model Payment {
   slippageBps            Int?
   quoteExpiresAt         DateTime?
   refundDestination      String?
+  depositAddress         String?
+  depositMemo            String?
+  depositRequirementsJson String?
+  idempotencyKey         String?      @unique
   transactionHash        String?
   refundStatus           String?
   createdAt              DateTime     @default(now())

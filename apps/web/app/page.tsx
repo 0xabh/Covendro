@@ -1,93 +1,27 @@
+"use client";
+
+import { useCallback, useEffect, useState } from "react";
+
+const apiBase = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
 const navigation = [
-  { label: "Dashboard", href: "/" },
-  { label: "Invoices", href: "/invoices" },
-  { label: "Payments", href: "#" },
-  { label: "Treasury policy", href: "#" },
-  { label: "Vendors", href: "#" },
-  { label: "Audit", href: "#" },
+  { label: "Dashboard", href: "/" }, { label: "Invoices", href: "/invoices" }, { label: "Payments", href: "/payments" },
+  { label: "Ledger", href: "/ledger" }, { label: "Treasury policy", href: "/treasury-policy" }, { label: "Vendors", href: "/vendors" }, { label: "Audit", href: "/audit" },
 ];
 
+type Dashboard = { pendingInvoices: number; approvedAmountMinor: number; paidAmountMinor: number; warningCount: number; blockedCount: number; currentPolicy: { version: number; demoMode: boolean; freezePayments: boolean; allowedCurrencies: string[]; allowedChains: string[] } | null; recentActivity: Array<{ id: string; eventType: string; description: string; createdAt: string; invoice?: { invoiceNumber: string } | null }> };
+function amount(minor: number) { return `USDC ${(minor / 100).toLocaleString(undefined, { minimumFractionDigits: 2 })}`; }
+
 export default function HomePage() {
-  return (
-    <main className="app-shell">
-      <aside className="sidebar">
-        <div className="brand-mark">C</div>
-        <div>
-          <p className="eyebrow">Private treasury OS</p>
-          <h1>Covendro</h1>
-        </div>
-        <nav aria-label="Main navigation">
-          {navigation.map((item, index) => (
-            <a className={index === 0 ? "nav-item active" : "nav-item"} href={item.href} key={item.label}>
-              {item.label}
-            </a>
-          ))}
-        </nav>
-        <div className="sidebar-footer">
-          <span className="status-dot" aria-hidden="true" />
-          Demo mode enabled
-        </div>
-      </aside>
+  const [dashboard, setDashboard] = useState<Dashboard | null>(null);
+  const [state, setState] = useState<"loading" | "ready" | "error">("loading");
+  const load = useCallback(() => { setState("loading"); fetch(`${apiBase}/api/dashboard`).then(async (response) => { if (!response.ok) throw new Error(); return response.json(); }).then((result) => { setDashboard(result.data); setState("ready"); }).catch(() => setState("error")); }, []);
+  useEffect(() => { void load(); }, [load]);
 
-      <section className="content">
-        <header className="topbar">
-          <div>
-            <p className="eyebrow">Treasury workspace</p>
-            <h2>Good morning, Treasury Admin</h2>
-          </div>
-          <span className="role-pill">Treasury administrator</span>
-        </header>
-
-        <section className="notice" aria-label="Demo mode notice">
-          <div>
-            <strong>Demo workspace</strong>
-            <p>Payments are simulated. No real funds or private keys are used.</p>
-          </div>
-          <span className="notice-tag">MOCK RAILS</span>
-        </section>
-
-        <section className="hero-card">
-          <div>
-            <p className="eyebrow">One controlled workflow</p>
-            <h3>Move every payable from upload to audit-ready settlement.</h3>
-            <p className="muted">
-              Upload an invoice, inspect private extraction and risk signals, then approve a
-              simulated cross-chain payment.
-            </p>
-            <a className="button-link" href="/invoices/new">Upload an invoice</a>
-          </div>
-          <div className="workflow" aria-label="Workflow preview">
-            {["Upload", "Verify", "Approve", "Settle"].map((step, index) => (
-              <div className="workflow-step" key={step}>
-                <span>{String(index + 1).padStart(2, "0")}</span>
-                <strong>{step}</strong>
-              </div>
-            ))}
-          </div>
-        </section>
-
-        <section className="metrics" aria-label="Treasury metrics">
-          {[
-            ["Pending invoices", "0", "No invoices need review"],
-            ["Approved amount", "$0.00", "Across approved requests"],
-            ["Paid amount", "$0.00", "Simulated settlements"],
-            ["Warnings", "0", "Risk signals to review"],
-          ].map(([label, value, detail]) => (
-            <article className="metric-card" key={label}>
-              <p className="eyebrow">{label}</p>
-              <strong>{value}</strong>
-              <p className="muted">{detail}</p>
-            </article>
-          ))}
-        </section>
-
-        <section className="empty-state">
-          <div className="empty-icon">◎</div>
-          <h3>Your payable queue is clear</h3>
-          <p className="muted">Upload a fictional sample invoice to begin the complete MVP workflow.</p>
-          <a className="button-link secondary-button" href="/invoices/new">Browse sample invoices</a>
-        </section>
-      </section>
-    </main>
-  );
+  return <main className="app-shell"><aside className="sidebar"><div className="brand-mark">C</div><div><p className="eyebrow">Private treasury OS</p><h1>Covendro</h1></div><nav aria-label="Main navigation">{navigation.map((item, index) => <a className={index === 0 ? "nav-item active" : "nav-item"} href={item.href} key={item.label}>{item.label}</a>)}</nav><div className="sidebar-footer"><span className="status-dot" aria-hidden="true" />Demo mode enabled</div></aside>
+    <section className="content"><header className="topbar"><div><p className="eyebrow">Treasury workspace</p><h2>Good morning, Treasury Admin</h2><p className="topbar-subtitle">One control plane for every payable decision.</p></div><div className="topbar-actions"><a className="text-link" href="/audit">View audit</a><a className="button-link compact-button" href="/invoices/new">New invoice</a><span className="role-pill">Treasury administrator</span></div></header><section className="notice" aria-label="Demo mode notice"><div className="notice-copy"><span className="live-dot" aria-hidden="true" /><div><strong>Demo workspace</strong><p>Payments are simulated. No real funds or private keys are used.</p></div></div><span className="notice-tag">MOCK RAILS</span></section><section className="hero-card"><div><p className="eyebrow">One controlled workflow</p><h3>Move every payable from upload to audit-ready settlement.</h3><p className="muted">Upload an invoice, inspect private extraction and risk signals, then approve a simulated cross-chain payment.</p><a className="button-link" href="/invoices/new">Upload an invoice</a><div className="hero-meta"><span>Server-side controls</span><span>No private keys</span><span>Dry by default</span></div></div><div className="workflow" aria-label="Workflow preview">{["Upload", "Verify", "Approve", "Settle"].map((step, index) => <div className="workflow-step" key={step}><span>{String(index + 1).padStart(2, "0")}</span><strong>{step}</strong><b>↗</b></div>)}</div></section>
+      {state === "loading" && <section className="panel-state dashboard-state">Loading treasury metrics…</section>}
+      {state === "error" && <section className="panel-state error-state dashboard-state"><h2>Dashboard could not be loaded</h2><p className="muted">Check that the API is running, then retry.</p><button onClick={() => void load()}>Retry</button></section>}
+      {state === "ready" && dashboard && <><section className="metrics" aria-label="Treasury metrics">{[["Pending invoices", String(dashboard.pendingInvoices), "Open workflow requests"], ["Approved amount", amount(dashboard.approvedAmountMinor), "Approved but not paid"], ["Paid amount", amount(dashboard.paidAmountMinor), "Simulated settlements"], ["Warnings", String(dashboard.warningCount), `${dashboard.blockedCount} blocked payment${dashboard.blockedCount === 1 ? "" : "s"}`]].map(([label, value, detail], index) => <article className={`metric-card metric-card-${index + 1}`} key={label}><span className="metric-index">0{index + 1}</span><p className="eyebrow">{label}</p><strong>{value}</strong><p className="muted">{detail}</p></article>)}</section><section className="detail-grid"><article className="panel policy-panel"><div className="panel-heading"><div><p className="eyebrow">Current policy</p><h2>{dashboard.currentPolicy ? `Policy v${dashboard.currentPolicy.version}` : "No active policy"}</h2></div><span className={`status-badge ${dashboard.currentPolicy?.freezePayments ? "danger-badge" : ""}`}>{dashboard.currentPolicy?.freezePayments ? "FROZEN" : "ACTIVE"}</span></div>{dashboard.currentPolicy ? <><p className="muted">{dashboard.currentPolicy.freezePayments ? "Payment execution is frozen." : "Payment execution is ready for review."} {dashboard.currentPolicy.demoMode ? "Demo mode is enabled." : "Demo mode is disabled."}</p><p className="table-subtext">{dashboard.currentPolicy.allowedCurrencies.join(", ")} · {dashboard.currentPolicy.allowedChains.join(", ")}</p><a className="button-link secondary-button" href="/treasury-policy">Review policy</a></> : <p className="muted">Create a policy to control payment decisions.</p>}</article><article className="panel"><div className="panel-heading"><div><p className="eyebrow">Recent activity</p><h2>Latest decisions</h2></div><span className="activity-count">{dashboard.recentActivity.length} events</span></div>{dashboard.recentActivity.length === 0 ? <p className="muted">No activity yet.</p> : <div className="audit-list">{dashboard.recentActivity.slice(0, 5).map((event) => <div className="audit-row" key={event.id}><span className="status-dot" /><div><strong>{event.eventType.replaceAll("_", " ")}</strong><p className="muted">{event.description}</p></div><time>{new Date(event.createdAt).toLocaleDateString()}</time></div>)}</div>}<a className="table-subtext" href="/audit">View full audit history →</a></article></section></>}
+      {state === "ready" && dashboard?.recentActivity.length === 0 && <section className="empty-state"><div className="empty-icon">◎</div><h3>Your payable queue is clear</h3><p className="muted">Upload a fictional sample invoice to begin the complete MVP workflow.</p><a className="button-link secondary-button" href="/invoices/new">Browse sample invoices</a></section>}
+    </section></main>;
 }

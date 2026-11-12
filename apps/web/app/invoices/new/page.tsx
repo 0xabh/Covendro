@@ -136,7 +136,7 @@ export default function NewInvoicePage() {
   return (
     <main className="page-shell narrow-page">
       <header className="page-header">
-        <div><p className="eyebrow">New payable</p><h1>Upload an invoice</h1><p className="muted">JSON fixtures and manual entry are supported in this milestone. Original document content is hashed and discarded after processing.</p></div>
+        <div><p className="eyebrow">New payable</p><h1>Upload an invoice</h1><p className="muted">JSON fixtures and manual entry are supported. Original document content is hashed and discarded after processing.</p></div>
       </header>
       <div className="page-nav"><a href="/invoices">← Invoices</a><span>Demo mode · Submitter</span></div>
 

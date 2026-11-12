@@ -3,7 +3,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "Covendro",
-  description: "Private payables and treasury infrastructure for programmable businesses.",
+  description: "Covendro is a private accounts-payable and treasury safety system for crypto-native organizations.",
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
