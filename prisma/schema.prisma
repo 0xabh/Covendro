@@ -1,0 +1,206 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Organization {
+  id          String          @id @default(cuid())
+  name        String
+  slug        String          @unique
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+  users       User[]
+  vendors     Vendor[]
+  invoices    Invoice[]
+  policies    TreasuryPolicy[]
+  payments    Payment[]
+  auditEvents AuditEvent[]
+}
+
+model User {
+  id              String       @id @default(cuid())
+  organizationId  String
+  name            String
+  email           String       @unique
+  role            String
+  nearAccountId   String?
+  createdAt       DateTime     @default(now())
+  organization    Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  invoicesCreated Invoice[]    @relation("InvoiceCreator")
+  approvals       Approval[]
+  auditEvents     AuditEvent[]
+
+  @@index([organizationId, role])
+}
+
+model Vendor {
+  id             String       @id @default(cuid())
+  organizationId String
+  name           String
+  accountAddress String
+  accountChain   String?
+  allowlisted    Boolean      @default(false)
+  riskStatus     String       @default("UNKNOWN")
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  invoices       Invoice[]
+
+  @@unique([organizationId, accountAddress])
+  @@index([organizationId, allowlisted])
+}
+
+model Invoice {
+  id                   String           @id @default(cuid())
+  organizationId       String
+  vendorId             String
+  createdById          String
+  status               String           @default("DRAFT")
+  invoiceNumber        String
+  invoiceDate          DateTime
+  dueDate              DateTime?
+  currency             String
+  amountMinor          Int
+  paymentDestination   String
+  paymentChain         String?
+  memo                 String?
+  fileHash             String?
+  fileType             String?
+  extractedAt          DateTime?
+  extractionProvider   String?
+  extractionModel      String?
+  extractionConfidence Float?
+  verificationState    String?
+  createdAt            DateTime         @default(now())
+  updatedAt            DateTime         @updatedAt
+  organization         Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  vendor               Vendor           @relation(fields: [vendorId], references: [id])
+  createdBy            User             @relation("InvoiceCreator", fields: [createdById], references: [id])
+  lineItems            InvoiceLineItem[]
+  approvals            Approval[]
+  payment              Payment?
+  ledgerEntry          LedgerEntry?
+  auditEvents          AuditEvent[]
+
+  @@unique([organizationId, vendorId, invoiceNumber])
+  @@index([organizationId, status])
+  @@index([organizationId, dueDate])
+}
+
+model InvoiceLineItem {
+  id               String  @id @default(cuid())
+  invoiceId        String
+  description      String
+  quantity         Float
+  unitAmountMinor  Int
+  totalAmountMinor Int
+  invoice          Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+}
+
+model TreasuryPolicy {
+  id                            String       @id @default(cuid())
+  organizationId                String
+  version                       Int
+  maxPaymentPerTransactionMinor Int
+  maxDailyPaymentTotalMinor     Int
+  allowedCurrenciesCsv          String
+  allowedChainsCsv              String
+  allowedRecipientsCsv          String
+  requireApprovalAboveMinor     Int
+  blockUnknownRecipients        Boolean      @default(true)
+  warningsRequireManualReview   Boolean      @default(true)
+  freezePayments                Boolean      @default(false)
+  demoMode                      Boolean      @default(true)
+  active                        Boolean      @default(true)
+  createdAt                     DateTime     @default(now())
+  organization                  Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, version])
+  @@index([organizationId, active])
+}
+
+model Approval {
+  id         String   @id @default(cuid())
+  invoiceId  String
+  reviewerId String
+  decision   String
+  reason     String?
+  createdAt  DateTime @default(now())
+  invoice    Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  reviewer   User     @relation(fields: [reviewerId], references: [id])
+
+  @@unique([invoiceId, reviewerId])
+  @@index([invoiceId, decision])
+}
+
+model Payment {
+  id                     String       @id @default(cuid())
+  organizationId         String
+  invoiceId              String       @unique
+  status                 String       @default("QUOTE_REQUESTED")
+  rail                   String
+  quoteId                String?
+  sourceAsset            String?
+  destinationAsset       String?
+  sourceChain            String?
+  destinationChain       String?
+  amountMinor            Int
+  estimatedReceivedMinor Int?
+  slippageBps            Int?
+  quoteExpiresAt         DateTime?
+  refundDestination      String?
+  transactionHash        String?
+  refundStatus           String?
+  createdAt              DateTime     @default(now())
+  updatedAt              DateTime     @updatedAt
+  paidAt                 DateTime?
+  organization           Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  invoice                Invoice      @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  ledgerEntry            LedgerEntry?
+  auditEvents            AuditEvent[]
+
+  @@index([organizationId, status])
+}
+
+model LedgerEntry {
+  id               String   @id @default(cuid())
+  invoiceId        String   @unique
+  paymentId        String?  @unique
+  grossAmountMinor Int
+  currency         String
+  paymentStatus    String
+  paymentRail      String?
+  quoteId          String?
+  transactionHash  String?
+  refundStatus     String?
+  createdAt        DateTime @default(now())
+  approvedAt       DateTime?
+  paidAt           DateTime?
+  invoice          Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  payment          Payment? @relation(fields: [paymentId], references: [id], onDelete: SetNull)
+}
+
+model AuditEvent {
+  id             String       @id @default(cuid())
+  organizationId String
+  invoiceId      String?
+  paymentId      String?
+  actorId        String?
+  eventType      String
+  description    String
+  metadataJson   String?
+  requestId      String?
+  createdAt      DateTime     @default(now())
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  invoice        Invoice?     @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  payment        Payment?     @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  actor          User?        @relation(fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, createdAt])
+  @@index([invoiceId, createdAt])
+  @@index([eventType, createdAt])
+}

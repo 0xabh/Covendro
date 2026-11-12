@@ -1,0 +1,16 @@
+{
+  "vendorName": "Harbor Data Services",
+  "vendorAddress": "0x1111111111111111111111111111111111111111",
+  "vendorChain": "ethereum",
+  "invoiceNumber": "HDS-2026-014",
+  "invoiceDate": "2026-11-03",
+  "dueDate": "2026-11-20",
+  "currency": "USDT",
+  "amount": "780.50",
+  "lineItems": [
+    { "description": "Data availability monitoring", "quantity": "1", "unitAmount": "780.50" }
+  ],
+  "paymentDestination": "0x1111111111111111111111111111111111111111",
+  "paymentChain": "ethereum",
+  "memo": "Fictional demo invoice"
+}

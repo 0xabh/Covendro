@@ -1,0 +1,12 @@
+Vendor Name: Northstar Design Co.
+Vendor Address: northstar.near
+Vendor Chain: near
+Invoice Number: NS-TEXT-003
+Invoice Date: 2026-11-05
+Due Date: 2026-11-19
+Currency: USDC
+Amount: 640.00
+Item: Treasury policy review | quantity=1 | unitAmount=640.00
+Payment Destination: northstar.near
+Payment Chain: near
+Memo: Fictional plain-text invoice fixture
