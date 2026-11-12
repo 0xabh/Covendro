@@ -1,0 +1,17 @@
+{
+  "vendorName": "Northstar Design Co.",
+  "vendorAddress": "northstar.near",
+  "vendorChain": "near",
+  "invoiceNumber": "NS-2026-001",
+  "invoiceDate": "2026-11-01",
+  "dueDate": "2026-11-15",
+  "currency": "USDC",
+  "amount": "1250.00",
+  "lineItems": [
+    { "description": "Treasury dashboard design", "quantity": "1", "unitAmount": "900.00" },
+    { "description": "Approval workflow prototype", "quantity": "1", "unitAmount": "350.00" }
+  ],
+  "paymentDestination": "northstar.near",
+  "paymentChain": "near",
+  "memo": "Fictional demo invoice"
+}

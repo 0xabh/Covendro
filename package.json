@@ -1,0 +1,57 @@
+{
+  "name": "covendro",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Private payables and treasury infrastructure for programmable businesses.",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "concurrently -k \"npm run dev:api\" \"npm run dev:web\"",
+    "dev:api": "npm --workspace @covendro/api run dev",
+    "dev:web": "npm --workspace @covendro/web run dev",
+    "build": "npm run build:api && npm run build:web",
+    "build:api": "npm run typecheck:shared && npm --workspace @covendro/api run build",
+    "build:web": "npm --workspace @covendro/web run build",
+    "db:generate": "prisma generate",
+    "db:migrate": "node --import tsx/esm scripts/apply-sqlite-migration.ts",
+    "db:migrate:prisma": "prisma migrate deploy",
+    "db:seed": "node --import tsx/esm prisma/seed.ts",
+    "db:setup": "npm run db:generate && npm run db:migrate && npm run db:seed",
+    "typecheck": "npm run typecheck:shared && npm run typecheck:api && npm run typecheck:web",
+    "typecheck:shared": "npm --workspace @covendro/shared run typecheck",
+    "typecheck:api": "npm --workspace @covendro/api run typecheck",
+    "typecheck:web": "npm --workspace @covendro/web run typecheck",
+    "lint": "eslint .",
+    "test": "npm run typecheck:shared && vitest run",
+    "test:watch": "vitest",
+    "format": "prettier --write ."
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.16.0",
+    "@types/node": "^22.10.2",
+    "@types/pdfkit": "^0.17.7",
+    "@types/react": "^19.0.2",
+    "@types/react-dom": "^19.0.2",
+    "@typescript-eslint/eslint-plugin": "^8.18.0",
+    "@typescript-eslint/parser": "^8.18.0",
+    "concurrently": "^9.1.0",
+    "eslint": "^9.16.0",
+    "eslint-config-next": "^15.1.0",
+    "fastify": "^5.2.1",
+    "next": "^15.1.0",
+    "pdfkit": "^0.16.0",
+    "prettier": "^3.4.2",
+    "prisma": "6.19.3",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "typescript-eslint": "^8.18.0",
+    "vitest": "^2.1.8"
+  },
+  "prisma": {
+    "seed": "node --import tsx/esm prisma/seed.ts"
+  }
+}
