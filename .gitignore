@@ -11,3 +11,9 @@ blob-report/
 .env
 .env.local
 .DS_Store
+
+# Local-only demo recording material; never commit these files.
+docs/DEMO_*.md
+demo-recordings/
+*.mov
+*.mp4
