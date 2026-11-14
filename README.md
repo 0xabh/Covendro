@@ -2,6 +2,14 @@
 
 Covendro is a private accounts-payable and treasury safety system for crypto-native organizations.
 
+## NEAR Hackathon tracks
+
+Primary track: **Privacy & Private AI**
+
+Secondary track: **AI Security & Defense**
+
+Covendro applies NEAR AI Cloud to private invoice extraction and anomaly detection, then combines that evidence with deterministic vendor-risk and treasury-policy controls before generating a NEAR Intents / 1Click dry quote. No payment executes without explicit reviewer approval.
+
 ## Status
 
 The complete mock-mode vertical slice is implemented and tested. The repository contains a Next.js frontend, Fastify API, Prisma/SQLite persistence, JSON/text/PDF invoice intake, deterministic risk and policy controls, server-only NEAR AI Cloud and NEAR Intents adapters, approval workflow, payment simulation, ledger projection, audit history, CSV export, and dashboard reporting.
