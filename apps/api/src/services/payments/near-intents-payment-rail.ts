@@ -27,6 +27,19 @@ function statusFromProvider(value: unknown): PaymentStatusResult["status"] {
   }
 }
 
+async function providerError(response: Response) {
+  const raw = await response.text();
+  if (!raw) return `status ${response.status}`;
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const detail = parsed.message ?? parsed.error ?? parsed.detail;
+    if (typeof detail === "string" && detail.length > 0) return `status ${response.status}: ${detail.slice(0, 500)}`;
+  } catch {
+    // Fall back to a bounded plain-text response below.
+  }
+  return `status ${response.status}: ${raw.replace(/\s+/g, " ").slice(0, 500)}`;
+}
+
 export class NearIntentsPaymentRail implements PaymentRail {
   readonly name = "NearIntentsPaymentRail";
   readonly mode: "REAL_DRY" | "REAL_EXECUTED";
@@ -77,7 +90,7 @@ export class NearIntentsPaymentRail implements PaymentRail {
         deadline: input.deadline,
       }),
     });
-    if (!response.ok) throw new Error(`NEAR Intents quote request failed with status ${response.status}`);
+    if (!response.ok) throw new Error(`NEAR Intents quote request failed with ${await providerError(response)}`);
     const responseBody = await response.json() as NearQuoteResponse;
     const quote = responseBody.quote ?? responseBody;
     const amountOutAtomic = numberValue(quote.amountOut ?? quote.destinationAmount ?? quote.amount_out, input.amountMinor * 10 ** Math.max(this.destinationDecimals - 2, 0));

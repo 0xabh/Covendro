@@ -10,6 +10,7 @@ blob-report/
 *.db-journal
 .env
 .env.local
+.envy
 .DS_Store
 
 # Local-only demo recording material; never commit these files.

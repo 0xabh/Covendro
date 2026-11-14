@@ -22,6 +22,7 @@
     "e2e": "npm run build && playwright test",
     "e2e:prepare": "node scripts/prepare-e2e.mjs",
     "security:scan": "node scripts/security-scan.mjs",
+    "test:prepare": "node scripts/prepare-vitest.mjs",
     "verify:near": "node --import tsx/esm scripts/verify-near-integrations.mjs",
     "verify": "npm run security:scan && npm run typecheck && npm run lint && npm test && npm run build",
     "typecheck": "npm run typecheck:shared && npm run typecheck:api && npm run typecheck:web",
@@ -29,7 +30,7 @@
     "typecheck:api": "npm --workspace @covendro/api run typecheck",
     "typecheck:web": "npm --workspace @covendro/web run typecheck",
     "lint": "eslint .",
-    "test": "npm run typecheck:shared && vitest run",
+    "test": "npm run typecheck:shared && npm run test:prepare && vitest run",
     "test:watch": "vitest",
     "format": "prettier --write ."
   },

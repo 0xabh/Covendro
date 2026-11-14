@@ -30,7 +30,10 @@ export async function createPaymentQuote(invoiceId: string, actor: Actor, reques
     const prior = await prisma.payment.findUnique({ where: { idempotencyKey } });
     if (prior) {
       if (prior.invoiceId !== invoice.id) throw new ApiError(409, "IDEMPOTENCY_KEY_REUSED", "Idempotency key was already used for another invoice");
-      return { payment: await findPayment(prior.id, actor.organizationId), idempotent: true };
+      // A failed quote is safe to retry with the same logical operation. Keep
+      // successful and in-flight operations idempotent, but allow the request
+      // to rebuild the quote after a provider rejection or timeout.
+      if (prior.status !== "FAILED") return { payment: await findPayment(prior.id, actor.organizationId), idempotent: true };
     }
   }
   if (invoice.payment && ["QUOTE_REQUESTED", "QUOTE_READY", "PAYMENT_PENDING", "PAID"].includes(invoice.payment.status)) return { payment: await findPayment(invoice.payment.id, actor.organizationId), idempotent: true };
@@ -39,7 +42,10 @@ export async function createPaymentQuote(invoiceId: string, actor: Actor, reques
 
   const rail = getPaymentRail();
   const treasuryIdentity = await prisma.treasuryIdentity.findFirst({ where: { organizationId: actor.organizationId }, orderBy: { createdAt: "asc" } });
-  const refundDestination = treasuryIdentity?.nearAccountId ?? "treasury.covendro.testnet";
+  // Live 1Click quotes validate the refund account on the origin chain. The
+  // seeded demo identity is intentionally fictional, so prefer the explicit
+  // integration setting when the real dry-quote adapter is configured.
+  const refundDestination = process.env.NEAR_INTENTS_REFUND_TO ?? treasuryIdentity?.nearAccountId ?? "treasury.covendro.testnet";
   const destinationChain = invoice.paymentChain ?? invoice.vendor.accountChain ?? "near";
   const quoteInput: PaymentQuoteInput = {
     paymentId: invoice.payment?.id ?? `payment-${invoice.id}`,

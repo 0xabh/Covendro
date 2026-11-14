@@ -17,6 +17,40 @@ invoice upload → private extraction → verification → vendor risk → polic
 
 The default development mode is safe mock mode. It does not require external credentials, does not execute real payments, and does not store private keys.
 
+## Product screenshots
+
+The screenshots below show the working product using fictional demo data. They are included so judges can understand the complete workflow without running the repository locally.
+
+### Dashboard and NEAR integration state
+
+The dashboard surfaces the approval pipeline, current treasury policy, and server-side NEAR AI Cloud / NEAR Intents configuration without exposing credentials.
+
+![Covendro dashboard showing workflow status and NEAR integration state](dashboard.png)
+
+### Invoice verification and approval evidence
+
+An invoice detail view combines AI extraction metadata, verification state, deterministic vendor risk, treasury policy output, approval records, and the audit timeline.
+
+![Covendro invoice detail showing verification, risk, policy, and audit evidence](invoice-detail.png)
+
+### NEAR Intents real dry quote
+
+After approval, Covendro displays the real dry quote returned by the NEAR Intents 1Click adapter. The UI clearly shows that no execution occurred.
+
+![Covendro payment page showing a real dry NEAR Intents quote](payment-quote.png)
+
+### Treasury policy controls
+
+The policy screen exposes thresholds, allowed chains and currencies, recipient controls, approval requirements, and the demo freeze switch.
+
+![Covendro treasury policy controls](treasury-policy.png)
+
+### Audit history
+
+Every material workflow decision is recorded with its event type, actor, request context, and payment linkage.
+
+![Covendro audit history](audit.png)
+
 ## Concrete use case
 
 A Web3 infrastructure startup is preparing to pay a 7,500 USDC invoice from an external smart-contract security firm. The invoice is syntactically valid, but the wallet address differs from the firm's payment history and the amount exceeds the startup's approval threshold. A spreadsheet can record the payment; it cannot reliably enforce the decision.
