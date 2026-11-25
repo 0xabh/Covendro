@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test";
 
 test("completes the invoice-to-ledger happy path", async ({ page }) => {
   await page.goto("/");
-  await expect(page.getByRole("heading", { name: "Covendro" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Covendro overview" })).toBeVisible();
 
   await page.getByRole("link", { name: "Upload an invoice" }).click();
   await page.selectOption('select[aria-label="Sample invoice"]', "sample-invoice-001.json");
