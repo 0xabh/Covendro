@@ -1,4 +1,4 @@
-export const paymentQuoteModes = ["MOCK", "REAL_DRY", "REAL_EXECUTED"] as const;
+export const paymentQuoteModes = ["MOCK", "REAL_DRY", "LIVE_HANDOFF", "REAL_EXECUTED"] as const;
 export type PaymentQuoteMode = (typeof paymentQuoteModes)[number];
 
 export const paymentStatuses = ["QUOTE_REQUESTED", "QUOTE_READY", "PAYMENT_PENDING", "PAID", "REFUNDED", "FAILED", "EXPIRED"] as const;

@@ -7,7 +7,8 @@ import {
   ProgressTrack,
 } from "@ui-sdk/react/progress";
 
-const apiBase = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
+import { useWorkspaceRole } from "../components/app-shell";
+import { apiBase, apiFetch, pilotMode } from "../lib/api";
 type Dashboard = {
   pendingInvoices: number;
   approvedAmountMinor: number;
@@ -53,6 +54,8 @@ function amount(minor: number) {
 }
 
 export default function HomePage() {
+  const role = useWorkspaceRole();
+  const canSubmit = !pilotMode || role === "SUBMITTER";
   const [dashboard, setDashboard] = useState<Dashboard | null>(null);
   const [integrations, setIntegrations] = useState<IntegrationStatus | null>(
     null,
@@ -65,8 +68,8 @@ export default function HomePage() {
     setState("loading");
     setIntegrationState("loading");
     Promise.all([
-      fetch(`${apiBase}/api/dashboard`),
-      fetch(`${apiBase}/api/integrations/status`),
+      apiFetch(`${apiBase}/api/dashboard`),
+      apiFetch(`${apiBase}/api/integrations/status`),
     ])
       .then(async ([dashboardResponse, integrationResponse]) => {
         if (!dashboardResponse.ok || !integrationResponse.ok) throw new Error();
@@ -89,7 +92,7 @@ export default function HomePage() {
   async function verifyAccount() {
     setIntegrationState("loading");
     try {
-      const response = await fetch(
+      const response = await apiFetch(
         `${apiBase}/api/integrations/status?verifyAccount=true`,
       );
       if (!response.ok) throw new Error();
@@ -143,13 +146,11 @@ export default function HomePage() {
           <a className="text-link" href="/audit">
             View audit
           </a>
-          <a className="button-link compact-button" href="/invoices/new">
-            New invoice
-          </a>
-          <span className="role-pill">Treasury administrator</span>
+          {canSubmit && <a className="button-link compact-button" href="/invoices/new">New invoice</a>}
+          <span className="role-pill">{pilotMode ? role?.replaceAll("_", " ").toLowerCase() : "Treasury administrator"}</span>
         </div>
       </header>
-      <section className="notice" aria-label="Demo mode notice">
+      {!pilotMode && <section className="notice" aria-label="Demo mode notice">
         <div className="notice-copy">
           <span className="live-dot" aria-hidden="true" />
           <div>
@@ -160,22 +161,19 @@ export default function HomePage() {
           </div>
         </div>
         <span className="notice-tag">MOCK RAILS</span>
-      </section>
+      </section>}
       <section className="hero-card">
         <div>
           <p className="eyebrow">One controlled workflow</p>
           <h2>Move every payable from upload to audit-ready settlement.</h2>
           <p className="muted">
-            Upload an invoice, inspect private extraction and risk signals, then
-            approve a simulated cross-chain payment.
+            {pilotMode ? "Review payable terms, confirm treasury funding, and track the evidence in the audit history." : "Upload an invoice, inspect private extraction and risk signals, then approve a simulated cross-chain payment."}
           </p>
-          <a className="button-link" href="/invoices/new">
-            Upload an invoice
-          </a>
+          {canSubmit && <a className="button-link" href="/invoices/new">Upload an invoice</a>}
           <div className="hero-meta">
             <span>Server-side controls</span>
             <span>No private keys</span>
-            <span>Dry by default</span>
+            <span>{pilotMode ? "Wallet authorization required" : "Dry by default"}</span>
           </div>
         </div>
         <div className="workflow" aria-label="Workflow preview">
@@ -408,7 +406,7 @@ export default function HomePage() {
               </a>
             </article>
           </section>
-          <section className="panel">
+          {!pilotMode && <section className="panel">
             <p className="eyebrow">Judge scenarios</p>
             <h2>Run the safety story</h2>
             <p className="muted">
@@ -438,7 +436,7 @@ export default function HomePage() {
                 <span>Open policy →</span>
               </a>
             </div>
-          </section>
+          </section>}
         </>
       )}
       {state === "ready" && dashboard?.recentActivity.length === 0 && (
@@ -446,12 +444,9 @@ export default function HomePage() {
           <div className="empty-icon">◎</div>
           <h3>Your payable queue is clear</h3>
           <p className="muted">
-            Upload a fictional sample invoice to begin the complete MVP
-            workflow.
+            {pilotMode ? "Submitted invoices appear here as they enter review." : "Upload a fictional sample invoice to begin the complete MVP workflow."}
           </p>
-          <a className="button-link secondary-button" href="/invoices/new">
-            Browse sample invoices
-          </a>
+          {canSubmit && <a className="button-link secondary-button" href="/invoices/new">{pilotMode ? "New invoice" : "Browse sample invoices"}</a>}
         </section>
       )}
     </main>

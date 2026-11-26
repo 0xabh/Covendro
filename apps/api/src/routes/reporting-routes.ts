@@ -1,22 +1,12 @@
 import type { FastifyInstance } from "fastify";
-import { getDemoUser } from "../repositories/organization-repository.js";
-import { ApiError } from "../errors.js";
+import { requireWorkspaceUser } from "../services/workspace-access.js";
 import { csvToList } from "@covendro/shared";
 import { prisma } from "../db/prisma.js";
 
-function getUserEmail(request: { headers: Record<string, unknown> }) {
-  const header = request.headers["x-demo-user-email"];
-  return typeof header === "string" && header.length > 0 ? header : "submitter@covendro.local";
-}
-
-async function requireUser(request: { headers: Record<string, unknown> }) {
-  const user = await getDemoUser(getUserEmail(request));
-  if (!user) throw new ApiError(401, "DEMO_USER_NOT_FOUND", "Choose a seeded demo user before continuing");
-  return user;
-}
 
 function csvValue(value: unknown) {
-  const text = value === null || value === undefined ? "" : String(value);
+  const raw = value === null || value === undefined ? "" : String(value);
+  const text = /^[\s\uFEFF]*[=+@-]|^[\t\r\n]/.test(raw) ? "'" + raw : raw;
   return /[",\n\r]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
 }
 
@@ -53,12 +43,12 @@ const ledgerColumns = ["invoiceId", "invoiceNumber", "vendor", "grossAmount", "c
 
 export function registerReportingRoutes(app: FastifyInstance) {
   app.get("/api/ledger", async (request) => {
-    const user = await requireUser(request);
+    const user = await requireWorkspaceUser(request, "submitter@covendro.local");
     return { data: (await ledgerRows(user.organizationId)).map(ledgerResponse) };
   });
 
   app.get("/api/ledger.csv", async (request, reply) => {
-    const user = await requireUser(request);
+    const user = await requireWorkspaceUser(request, "submitter@covendro.local");
     const rows = (await ledgerRows(user.organizationId)).map((entry) => {
       const item = ledgerResponse(entry);
       return { invoiceId: item.invoiceId, invoiceNumber: item.invoiceNumber, vendor: item.vendor, grossAmount: `${item.currency} ${(item.grossAmountMinor / 100).toFixed(2)}`, currency: item.currency, paymentStatus: item.paymentStatus, paymentRail: item.paymentRail, quoteMode: item.quoteMode, quoteId: item.quoteId, transactionHash: item.transactionHash, refundStatus: item.refundStatus, createdAt: item.createdAt.toISOString(), approvedAt: item.approvedAt?.toISOString() ?? "", paidAt: item.paidAt?.toISOString() ?? "" };
@@ -67,7 +57,7 @@ export function registerReportingRoutes(app: FastifyInstance) {
   });
 
   app.get<{ Querystring: { eventType?: string; invoiceId?: string; limit?: string } }>("/api/audit-events", async (request) => {
-    const user = await requireUser(request);
+    const user = await requireWorkspaceUser(request, "submitter@covendro.local");
     const parsedLimit = Number(request.query.limit ?? 100);
     const limit = Number.isFinite(parsedLimit) ? Math.min(Math.max(Math.floor(parsedLimit), 1), 500) : 100;
     const events = await prisma.auditEvent.findMany({ where: { organizationId: user.organizationId, eventType: request.query.eventType, invoiceId: request.query.invoiceId }, include: { actor: true, invoice: { select: { invoiceNumber: true } }, payment: { select: { id: true, quoteId: true } } }, orderBy: { createdAt: "desc" }, take: limit });
@@ -75,14 +65,14 @@ export function registerReportingRoutes(app: FastifyInstance) {
   });
 
   app.get("/api/audit-events.csv", async (request, reply) => {
-    const user = await requireUser(request);
+    const user = await requireWorkspaceUser(request, "submitter@covendro.local");
     const events = await prisma.auditEvent.findMany({ where: { organizationId: user.organizationId }, include: { actor: true, invoice: { select: { invoiceNumber: true } }, payment: { select: { id: true } } }, orderBy: { createdAt: "desc" } });
     const rows = events.map((event) => ({ id: event.id, createdAt: event.createdAt.toISOString(), eventType: event.eventType, description: event.description, invoiceNumber: event.invoice?.invoiceNumber ?? "", paymentId: event.payment?.id ?? "", actor: event.actor?.email ?? "", requestId: event.requestId ?? "" }));
     return reply.type("text/csv; charset=utf-8").header("content-disposition", "attachment; filename=covendro-audit.csv").send(csv(rows, ["id", "createdAt", "eventType", "description", "invoiceNumber", "paymentId", "actor", "requestId"]));
   });
 
   app.get("/api/dashboard", async (request) => {
-    const user = await requireUser(request);
+    const user = await requireWorkspaceUser(request, "submitter@covendro.local");
     const [invoices, recentActivity, policy, treasuryIdentity] = await Promise.all([
       prisma.invoice.findMany({ where: { organizationId: user.organizationId }, select: { id: true, status: true, amountMinor: true, vendorRiskDecision: true, policyDecision: true, currency: true } }),
       prisma.auditEvent.findMany({ where: { organizationId: user.organizationId }, include: { actor: true, invoice: { select: { invoiceNumber: true } } }, orderBy: { createdAt: "desc" }, take: 8 }),

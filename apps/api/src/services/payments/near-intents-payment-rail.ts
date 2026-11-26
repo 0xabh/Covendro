@@ -10,9 +10,11 @@ function stringValue(value: unknown, fallback: string) {
   return typeof value === "string" && value.length > 0 ? value : fallback;
 }
 
-function numberValue(value: unknown, fallback: number) {
-  const parsed = typeof value === "number" ? value : Number(value);
-  return Number.isFinite(parsed) ? parsed : fallback;
+function atomicUnitsPerCent(decimals: number) {
+  if (!Number.isInteger(decimals) || decimals < 2 || decimals > 255) {
+    throw new Error("Unsupported 1Click asset precision");
+  }
+  return 10n ** BigInt(decimals - 2);
 }
 
 function statusFromProvider(value: unknown): PaymentStatusResult["status"] {
@@ -42,42 +44,65 @@ async function providerError(response: Response) {
 
 export class NearIntentsPaymentRail implements PaymentRail {
   readonly name = "NearIntentsPaymentRail";
-  readonly mode: "REAL_DRY" | "REAL_EXECUTED";
+  readonly mode = "REAL_DRY" as const;
   private readonly apiUrl: string;
   private readonly jwt: string;
   private readonly originAssetId: string;
   private readonly destinationAssetId: string;
   private readonly originDecimals: number;
   private readonly destinationDecimals: number;
-  private readonly dry: boolean;
   private readonly fetchImpl: FetchLike;
+  private readonly pilotPreview: boolean;
 
-  constructor(options: { apiUrl?: string; jwt: string; originAssetId: string; destinationAssetId: string; originDecimals?: number; destinationDecimals?: number; dry?: boolean; fetchImpl?: FetchLike }) {
+  constructor(options: { apiUrl?: string; jwt: string; originAssetId: string; destinationAssetId: string; originDecimals?: number; destinationDecimals?: number; fetchImpl?: FetchLike; pilotPreview?: boolean }) {
     this.apiUrl = (options.apiUrl ?? process.env.NEAR_INTENTS_API_URL ?? "https://1click.chaindefuser.com/v0").replace(/\/$/, "");
     this.jwt = options.jwt;
     this.originAssetId = options.originAssetId;
     this.destinationAssetId = options.destinationAssetId;
     this.originDecimals = options.originDecimals ?? Number(process.env.NEAR_INTENTS_ORIGIN_ASSET_DECIMALS ?? 6);
     this.destinationDecimals = options.destinationDecimals ?? Number(process.env.NEAR_INTENTS_DESTINATION_ASSET_DECIMALS ?? this.originDecimals);
-    this.dry = options.dry ?? (process.env.REAL_PAYMENTS_ENABLED !== "true" || process.env.NEAR_INTENTS_DRY_RUN !== "false");
-    this.mode = this.dry ? "REAL_DRY" : "REAL_EXECUTED";
     this.fetchImpl = options.fetchImpl ?? fetch;
+    this.pilotPreview = options.pilotPreview ?? false;
   }
 
   async getSupportedAssets(): Promise<SupportedAsset[]> {
     const response = await this.fetchImpl(`${this.apiUrl}/tokens`, { headers: { authorization: `Bearer ${this.jwt}` } });
     if (!response.ok) throw new Error(`NEAR Intents token request failed with status ${response.status}`);
-    return await response.json() as SupportedAsset[];
+    const assets: unknown = await response.json();
+    if (!Array.isArray(assets)) throw new Error("Invalid 1Click token catalog");
+    return assets.flatMap((asset) => {
+      if (!asset || typeof asset.assetId !== "string" || typeof asset.symbol !== "string" ||
+          typeof asset.blockchain !== "string" || !Number.isInteger(asset.decimals)) return [];
+      return [{ assetId: asset.assetId, symbol: asset.symbol, chain: asset.blockchain, decimals: asset.decimals }];
+    });
   }
 
   async createQuote(input: PaymentQuoteInput): Promise<PaymentQuote> {
-    const atomicAmount = String(input.amountMinor * 10 ** Math.max(this.originDecimals - 2, 0));
+    if (!Number.isSafeInteger(input.amountMinor) || input.amountMinor <= 0) {
+      throw new Error("Invalid 1Click quote amount");
+    }
+    const destinationUnitsPerCent = atomicUnitsPerCent(this.destinationDecimals);
+    const originUnitsPerCent = atomicUnitsPerCent(this.originDecimals);
+    const swapType = this.pilotPreview ? "EXACT_OUTPUT" : "EXACT_INPUT";
+    const atomicAmount = (BigInt(input.amountMinor) * (this.pilotPreview ? destinationUnitsPerCent : originUnitsPerCent)).toString();
+    if (this.pilotPreview) {
+      if (input.sourceChain !== "near" || input.destinationChain !== "base" || input.currency !== "USDC") {
+        throw new Error("Pilot previews support NEAR to Base USDC only");
+      }
+      const tokens = await this.getSupportedAssets();
+      const origin = tokens.find((asset) => asset.assetId === this.originAssetId);
+      const destination = tokens.find((asset) => asset.assetId === this.destinationAssetId);
+      if (origin?.chain !== "near" || origin.symbol !== "USDC" || origin.decimals !== this.originDecimals ||
+          destination?.chain !== "base" || destination.symbol !== "USDC" || destination.decimals !== this.destinationDecimals) {
+        throw new Error("The configured pilot assets do not match the 1Click catalog");
+      }
+    }
     const response = await this.fetchImpl(`${this.apiUrl}/quote`, {
       method: "POST",
       headers: { authorization: `Bearer ${this.jwt}`, "content-type": "application/json" },
       body: JSON.stringify({
-        dry: this.dry,
-        swapType: "EXACT_INPUT",
+        dry: true,
+        swapType,
         slippageTolerance: input.slippageBps,
         originAsset: this.originAssetId,
         depositType: "ORIGIN_CHAIN",
@@ -93,7 +118,17 @@ export class NearIntentsPaymentRail implements PaymentRail {
     if (!response.ok) throw new Error(`NEAR Intents quote request failed with ${await providerError(response)}`);
     const responseBody = await response.json() as NearQuoteResponse;
     const quote = responseBody.quote ?? responseBody;
-    const amountOutAtomic = numberValue(quote.amountOut ?? quote.destinationAmount ?? quote.amount_out, input.amountMinor * 10 ** Math.max(this.destinationDecimals - 2, 0));
+    const amountOut = quote.amountOut ?? quote.destinationAmount ?? quote.amount_out;
+    if (typeof amountOut !== "string" || !/^\d+$/.test(amountOut)) {
+      throw new Error("1Click quote is missing a valid output amount");
+    }
+    if (this.pilotPreview && BigInt(amountOut) !== BigInt(atomicAmount)) {
+      throw new Error("The 1Click quote does not deliver the exact payable amount");
+    }
+    const estimatedReceivedMinor = Number(BigInt(amountOut) / destinationUnitsPerCent);
+    if (!Number.isSafeInteger(estimatedReceivedMinor)) {
+      throw new Error("1Click output amount exceeds the supported range");
+    }
     return {
       quoteId: stringValue(quote.quoteId ?? quote.id, `near-intents-${input.paymentId}`),
       mode: this.mode,
@@ -103,13 +138,10 @@ export class NearIntentsPaymentRail implements PaymentRail {
       sourceChain: input.sourceChain,
       destinationChain: input.destinationChain,
       amountMinor: input.amountMinor,
-      estimatedReceivedMinor: Math.floor(amountOutAtomic / 10 ** Math.max(this.destinationDecimals - 2, 0)),
+      estimatedReceivedMinor,
       slippageBps: input.slippageBps,
       quoteExpiresAt: stringValue(quote.deadline ?? quote.expirationTime, input.deadline),
       refundDestination: input.refundDestination,
-      depositAddress: typeof quote.depositAddress === "string" ? quote.depositAddress : undefined,
-      depositMemo: typeof quote.depositMemo === "string" ? quote.depositMemo : undefined,
-      depositRequirements: { depositType: "ORIGIN_CHAIN", depositAddress: quote.depositAddress, depositMemo: quote.depositMemo },
       providerStatus: stringValue(quote.status, "PENDING_DEPOSIT"),
       requestId: response.headers.get("x-request-id") ?? undefined,
     };

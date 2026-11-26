@@ -18,3 +18,6 @@ docs/DEMO_*.md
 demo-recordings/
 *.mov
 *.mp4
+
+# Derived before generating the production Prisma client
+/prisma/postgresql/schema.prisma

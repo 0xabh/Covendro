@@ -112,7 +112,7 @@ Open [http://localhost:3000](http://localhost:3000) for the web shell. The API h
 
 ## Environment variables
 
-See `.env.example`. No external credential is required for the default demo. `NEAR_AI_CLOUD_API_KEY` and `NEAR_INTENTS_JWT` are optional and will only be used by their adapters when configured. Real payment execution remains disabled by default with `REAL_PAYMENTS_ENABLED=false`.
+See `.env.example`. No external credential is required for the default demo. `NEAR_AI_CLOUD_API_KEY` and `NEAR_INTENTS_JWT` are optional and will only be used by their adapters when configured. The 1Click adapter always requests dry quotes.
 
 `npm run db:migrate` applies the checked-in SQLite migration deterministically for local setup. `npm run db:migrate:prisma` is also available for environments where Prisma's migration engine is working normally.
 
@@ -189,13 +189,13 @@ The demo administrator can use `/treasury-policy` to create a new policy version
 
 ## Payment quotes and settlement simulation
 
-Approved invoices can request a quote through `POST /api/invoices/:id/quote`. Without NEAR Intents credentials, the API uses `MockPaymentRail` and labels the result `MOCK`. With `NEAR_INTENTS_JWT`, `NEAR_INTENTS_ORIGIN_ASSET_ID`, and `NEAR_INTENTS_DESTINATION_ASSET_ID` configured, it uses the server-only 1Click adapter and labels a dry response `REAL_DRY`. `REAL_PAYMENTS_ENABLED=false` and `NEAR_INTENTS_DRY_RUN=true` keep execution disabled by default.
+Approved invoices can request a quote through `POST /api/invoices/:id/quote`. Without NEAR Intents credentials, the API uses `MockPaymentRail` and labels the result `MOCK`. With `NEAR_INTENTS_JWT`, `NEAR_INTENTS_ORIGIN_ASSET_ID`, and `NEAR_INTENTS_DESTINATION_ASSET_ID` configured, it uses the server-only 1Click adapter and labels a dry response `REAL_DRY`. The adapter omits funding instructions from previews.
 
 To verify both live adapters without exposing credentials, copy the optional variables from `.env.example` into an uncommitted local `.env`, then run `npm run verify:near`. The command sends fictional invoice data to NEAR AI Cloud, checks structured extraction/anomaly responses and request IDs, queries the live 1Click token catalog, and requests a forced `dry: true` quote. It prints only provider metadata and presence checks; it never prints API keys/JWTs or executes a payment. A real 1Click quote requires a valid `NEAR_INTENTS_TEST_RECIPIENT` matching the configured destination chain.
 
 The live verification path has been exercised locally. The NEAR AI Cloud adapter returned extraction and anomaly results using `google/gemini-2.5-flash-lite`; its status is intentionally `UNVERIFIED` because attestation/signature verification is not implemented. The NEAR Intents adapter returned a real dry quote with status `PENDING_DEPOSIT`; no funds were deposited and no payment was executed.
 
-The `/payments` pages show quote mode, provider status, deposit requirements, expiry, refund destination, and meta-transaction design. Only mock quotes expose local success/refund/failure/expiry simulation controls. A real dry quote is a quote preview and never a settled payment.
+The `/payments` pages show quote mode, provider status, expiry, refund destination, and meta-transaction design. Only mock quotes expose local success/refund/failure/expiry simulation controls. A real dry quote is a quote preview and never a settled payment.
 
 The payment design supports a future relayer/meta-transaction path so users do not need to manually acquire NEAR gas. That path is documented and visible, but no real relayer or payment execution is enabled in this MVP.
 
@@ -210,3 +210,19 @@ An analyzed invoice can be submitted by its creator, reviewed by the seeded revi
 ## Conclusion
 
 Covendro provides a controlled payment path for crypto-native organizations: private invoice processing, deterministic treasury controls, explicit reviewer approval, cross-chain quote visibility, and an audit-ready record of what happened. The default configuration is safe for demos and local development, while the NEAR AI Cloud and NEAR Intents adapters provide clear integration paths when credentials are configured.
+
+## Authenticated workspace development
+
+The pilot workspace uses one-time invites, revocable eight-hour sessions, and secure HTTP-only cookies. Configure the web and API on the same HTTPS site, set the exact HTTPS web origin in `WEB_ORIGIN`, and set `DEMO_MODE=false` for the API and `NEXT_PUBLIC_COVENDRO_PILOT=true` at web build time. For production, set `DATABASE_URL` to a fresh PostgreSQL database. Run `npm run db:generate:postgresql` before building the API and `npm run db:migrate:postgresql` before startup. Keep the demo SQLite client and database in a separate installation. Run the pilot migrations without demo seed data. Run `node --import tsx scripts/manage-workspace-access.mts bootstrap <workspace-slug> <workspace-name>` to create a workspace with a frozen treasury before issuing invites.
+
+Run `node --import tsx scripts/manage-workspace-access.mts invite <workspace-slug> <email> <name> <role>` with the pilot database environment. The command prints a one-time secret valid for 30 minutes. Deliver it privately to the invited member. Run `node --import tsx scripts/manage-workspace-access.mts revoke <workspace-slug> <email>` to invalidate their invites and sessions. Roles are `SUBMITTER`, `REVIEWER`, `TREASURY_SIGNER`, `TREASURY_ADMINISTRATOR`, and `AUDITOR`.
+
+Run `node --import tsx scripts/manage-workspace-access.mts treasury <workspace-slug> <public-near-mainnet-account>` to configure the workspace refund account for dry previews. The authenticated build supports manual invoice confirmation and independently verified vendor destinations. The payment rail remains a dry preview while live signing and reconciliation are under development.
+
+### Mainnet attempt preparation
+
+The treasury signer can prepare a firm exact-output NEAR-to-Base USDC quote for an approved payable. Configure the pilot workspace slug, both 1Click asset IDs, the two USDC contracts, the maximum authorized debit in USDC cents, and a 1Click API key. The reviewer confirms the resulting debit ceiling with the payable terms. Covendro checks the token catalog and quote signature before storing the attempt.
+
+The signer reviews the quote on the invoice, connects MyNearWallet, signs the ownership challenge, and confirms the reserved transfer in the wallet. Keep `PILOT_ENABLE_WALLET_HANDOFF=false` until the destination and refund reconciliation worker is ready and the limited canary is authorized. The handoff API requires a current treasury ownership proof and reserves the maximum source debit transactionally before it returns an unsigned NEP-141 transfer. A returned handoff holds its reservation until financial evidence is reconciled. Origin funding verification records finalized matching NEAR evidence as pending settlement.
+
+Run the mocked pilot browser suite with `COVENDRO_PILOT_BROWSER_TEST=true npx playwright test`. It covers MyNearWallet account mismatch, ownership proof, the handoff gate, funding evidence, and cancellation with a retained reservation.

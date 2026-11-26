@@ -2,13 +2,13 @@
 
 import { useCallback, useEffect, useState } from "react";
 
-const apiBase = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
+import { apiBase, apiFetch } from "../../lib/api";
 type Event = { id: string; eventType: string; description: string; createdAt: string; requestId?: string | null; actor?: { email: string } | null; invoice?: { invoiceNumber: string } | null; payment?: { id: string; quoteId?: string | null } | null };
 
 export default function AuditPage() {
   const [events, setEvents] = useState<Event[]>([]);
   const [state, setState] = useState<"loading" | "ready" | "error">("loading");
-  const load = useCallback(() => { setState("loading"); fetch(`${apiBase}/api/audit-events?limit=200`).then(async (response) => { if (!response.ok) throw new Error(); return response.json(); }).then((result) => { setEvents(result.data); setState("ready"); }).catch(() => setState("error")); }, []);
+  const load = useCallback(() => { setState("loading"); apiFetch(`${apiBase}/api/audit-events?limit=200`).then(async (response) => { if (!response.ok) throw new Error(); return response.json(); }).then((result) => { setEvents(result.data); setState("ready"); }).catch(() => setState("error")); }, []);
   useEffect(() => { void load(); }, [load]);
 
   return <main className="page-shell"><header className="page-header"><div><p className="eyebrow">Traceability</p><h1>Audit history</h1><p className="muted">Every important workflow action with actor, request, invoice, and payment context.</p></div><a className="button-link" href={`${apiBase}/api/audit-events.csv`}>Export CSV</a></header><div className="page-nav"><a href="/">← Dashboard</a><span>{events.length} events shown</span></div>

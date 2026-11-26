@@ -113,6 +113,38 @@ try {
   } else {
     console.log(`SQLite payment rails schema already exists at ${databasePath}`);
   }
+
+  const hasWorkspaceCredentials = execFileSync("sqlite3", [databasePath, "SELECT 1 FROM sqlite_master WHERE type='table' AND name='WorkspaceCredential';"], { encoding: "utf8" }).trim() === "1";
+  if (!hasWorkspaceCredentials) {
+    execFileSync("sqlite3", [databasePath], {
+      input: readFileSync(path.resolve("prisma/migrations/20261126000100_workspace_access/migration.sql"), "utf8"),
+      stdio: ["pipe", "inherit", "inherit"],
+    });
+  }
+
+  const hasVendorDestination = execFileSync("sqlite3", [databasePath, "SELECT 1 FROM sqlite_master WHERE type='table' AND name='VendorDestination';"], { encoding: "utf8" }).trim() === "1";
+  if (!hasVendorDestination) {
+    execFileSync("sqlite3", [databasePath], {
+      input: readFileSync(path.resolve("prisma/migrations/20261126000200_vendor_destination/migration.sql"), "utf8"),
+      stdio: ["pipe", "inherit", "inherit"],
+    });
+  }
+
+  const hasPayableTerms = execFileSync("sqlite3", [databasePath, "PRAGMA table_info('Approval');"], { encoding: "utf8" }).includes("payableTermsJson");
+  if (!hasPayableTerms) {
+    execFileSync("sqlite3", [databasePath], {
+      input: readFileSync(path.resolve("prisma/migrations/20261126000300_approval_terms/migration.sql"), "utf8"),
+      stdio: ["pipe", "inherit", "inherit"],
+    });
+  }
+
+  const hasLivePaymentAttempts = execFileSync("sqlite3", [databasePath, "SELECT 1 FROM sqlite_master WHERE type='table' AND name='LivePaymentAttempt';"], { encoding: "utf8" }).trim() === "1";
+  if (!hasLivePaymentAttempts) {
+    execFileSync("sqlite3", [databasePath], {
+      input: readFileSync(path.resolve("prisma/migrations/20261127000100_live_payment_attempt/migration.sql"), "utf8"),
+      stdio: ["pipe", "inherit", "inherit"],
+    });
+  }
 } catch (error) {
   if (error instanceof Error && "code" in error && error.code === "ENOENT") {
     throw new Error("SQLite CLI not found. Install sqlite3 or use `npm run db:migrate:prisma`.");

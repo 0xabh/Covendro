@@ -7,9 +7,10 @@ import {
   CommandItem,
   CommandList,
 } from "@ui-sdk/react/command";
+import { apiBase, apiFetch, pilotMode } from "../lib/api";
 import { createAgent } from "@ui-sdk/react/agent";
 import { usePathname } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { createContext, useContext, useEffect, useMemo, useState } from "react";
 
 export const covendroAgent = createAgent();
 
@@ -48,7 +49,71 @@ const navigation = [
   },
 ];
 
+const WorkspaceRole = createContext<string | null>(null);
+
+export function useWorkspaceRole() {
+  return useContext(WorkspaceRole);
+}
+
+async function readWorkspaceRole() {
+  const response = await apiFetch(`${apiBase}/api/session`);
+  if (!response.ok) return null;
+  const data = (await response.json()).data;
+  return typeof data?.role === "string" ? data.role : null;
+}
+
+function WorkspaceAccess({ children }: { children: React.ReactNode }) {
+  const [state, setState] = useState<"loading" | "signed-out" | "signed-in">("loading");
+  const [role, setRole] = useState<string | null>(null);
+  const [invite, setInvite] = useState("");
+  const [error, setError] = useState("");
+  const [working, setWorking] = useState(false);
+
+  useEffect(() => {
+    readWorkspaceRole()
+      .then((role) => { setRole(role); setState(role ? "signed-in" : "signed-out"); })
+      .catch(() => setState("signed-out"));
+  }, []);
+
+  if (state === "loading") return <main className="page-shell">Checking workspace session…</main>;
+  if (state === "signed-in") return <WorkspaceRole.Provider value={role}>{children}</WorkspaceRole.Provider>;
+
+  return <main className="page-shell narrow-page">
+    <form className="panel" onSubmit={async (event) => {
+      event.preventDefault();
+      setWorking(true);
+      setError("");
+      try {
+        const response = await apiFetch(`${apiBase}/api/session`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ invite: invite.trim() }),
+        });
+        if (!response.ok) throw new Error("Sign-in failed. Check your invite or request a new one.");
+        const role = await readWorkspaceRole();
+        if (!role) throw new Error("Sign-in completed but the workspace session could not be loaded.");
+        setInvite("");
+        setRole(role);
+        setState("signed-in");
+      } catch (failure) {
+        setError(failure instanceof Error ? failure.message : "Sign-in failed");
+      } finally {
+        setWorking(false);
+      }
+    }}>
+      <h1>Sign in to Covendro</h1>
+      <label>Workspace invite<input type="password" value={invite} onChange={(event) => setInvite(event.target.value)} required autoComplete="off" /></label>
+      <button disabled={working}>Sign in</button>
+      {error && <p role="alert">{error}</p>}
+    </form>
+  </main>;
+}
+
 export function AppShell({ children }: { children: React.ReactNode }) {
+  return pilotMode ? <WorkspaceAccess><WorkspaceShell>{children}</WorkspaceShell></WorkspaceAccess> : <WorkspaceShell>{children}</WorkspaceShell>;
+}
+
+function WorkspaceShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const [commandOpen, setCommandOpen] = useState(false);
   const currentPage = useMemo(
@@ -85,10 +150,15 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <span className="workspace-avatar">TC</span>
           <span>
             <strong>Treasury control</strong>
-            <small>Demo workspace</small>
+            <small>{pilotMode ? "Pilot workspace" : "Demo workspace"}</small>
           </span>
           <span className="workspace-chevron">⌄</span>
         </div>
+
+        {pilotMode && <button type="button" onClick={async () => {
+          const response = await apiFetch(`${apiBase}/api/session`, { method: "DELETE" });
+          if (response.ok || response.status === 401) window.location.reload();
+        }}>Sign out</button>}
 
         <nav className="shell-nav" aria-label="Main navigation">
           {navigation.map((item) => {

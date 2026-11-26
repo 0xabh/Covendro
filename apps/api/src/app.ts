@@ -8,11 +8,14 @@ import { registerTreasuryRoutes } from "./routes/treasury-routes.js";
 import { registerWorkflowRoutes } from "./routes/workflow-routes.js";
 import { registerPaymentRoutes } from "./routes/payment-routes.js";
 import { registerReportingRoutes } from "./routes/reporting-routes.js";
+import { registerTreasuryProofRoutes } from "./routes/treasury-proof-routes.js";
+import { registerVendorDestinationRoutes } from "./routes/vendor-destination-routes.js";
+import { registerWorkspaceAccess } from "./services/workspace-access.js";
 import { registerIntegrationRoutes } from "./routes/integration-routes.js";
 
 export function buildApp(): FastifyInstance {
   const app = Fastify({ logger: false });
-  app.register(cors, { origin: true });
+  app.register(cors, { origin: process.env.DEMO_MODE === "false" ? (process.env.WEB_ORIGIN || false) : true, credentials: process.env.DEMO_MODE === "false" });
 
   app.get<{ Reply: HealthResponse }>("/health", async (request) => ({
     status: "ok",
@@ -44,8 +47,11 @@ export function buildApp(): FastifyInstance {
     });
   });
 
+  registerWorkspaceAccess(app);
   registerInvoiceRoutes(app);
   registerTreasuryRoutes(app);
+  registerVendorDestinationRoutes(app);
+  registerTreasuryProofRoutes(app);
   registerWorkflowRoutes(app);
   registerPaymentRoutes(app);
   registerReportingRoutes(app);

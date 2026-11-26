@@ -1,6 +1,7 @@
 import type { InvoiceStatus } from "@covendro/shared";
 import { canTransitionInvoice } from "@covendro/shared";
 import { prisma } from "../db/prisma.js";
+import { currentPayableTerms, hashPayableTerms } from "./payable-terms.js";
 import { ApiError } from "../errors.js";
 
 type Actor = { id: string; role: string; organizationId: string };
@@ -61,6 +62,40 @@ export async function submitInvoice(invoiceId: string, actor: Actor, requestId: 
 export async function resubmitInvoice(invoiceId: string, actor: Actor, requestId: string) {
   const invoice = await findInvoice(invoiceId, actor.organizationId);
   if (invoice.createdById !== actor.id && actor.role !== "TREASURY_ADMINISTRATOR") throw new ApiError(403, "SUBMITTER_ONLY_OWN_REQUEST", "Only the request creator or treasury administrator can resubmit this request");
+  if (process.env.DEMO_MODE === "false" && ["APPROVED", "REVIEW_REQUIRED"].includes(invoice.status)) {
+    await prisma.$transaction(async (tx) => {
+      const locked = await tx.invoice.updateMany({
+        where: { id: invoice.id, status: invoice.status, approvalRound: invoice.approvalRound },
+        data: { status: invoice.status },
+      });
+      if (!locked.count) throw new ApiError(409, "INVALID_APPROVAL_STATE", "The payable changed while restarting review");
+      const payment = await tx.payment.findUnique({ where: { invoiceId: invoice.id } });
+      if (payment && !["FAILED", "EXPIRED"].includes(payment.status)) {
+        throw new ApiError(409, "PAYMENT_ALREADY_STARTED", "The existing payment attempt must be resolved first");
+      }
+      const current = await tx.invoice.findUniqueOrThrow({ where: { id: invoice.id } });
+      const terms = await currentPayableTerms(tx, current);
+      const approvals = await tx.approval.findMany({
+        where: { invoiceId: current.id, approvalRound: current.approvalRound, decision: "APPROVED" },
+        select: { payableTermsJson: true },
+      });
+      if (!approvals.some((approval) => approval.payableTermsJson !== terms)) {
+        throw new ApiError(409, "APPROVAL_TERMS_CURRENT", "The payable terms have not changed");
+      }
+      await tx.invoice.update({
+        where: { id: invoice.id },
+        data: {
+          status: "REVIEW_REQUIRED",
+          approvalRound: { increment: 1 },
+          auditEvents: { create: {
+            organizationId: actor.organizationId, actorId: actor.id, eventType: "INVOICE_REVIEW_RESTARTED",
+            description: "Review restarted after payable terms changed", requestId,
+          } },
+        },
+      });
+    });
+    return { invoice: await findInvoice(invoiceId, actor.organizationId), idempotent: false };
+  }
   if (invoice.status === "REVIEW_REQUIRED") return { invoice, idempotent: true };
   if (invoice.status !== "REJECTED") throw new ApiError(409, "RESUBMIT_NOT_ALLOWED", "Only rejected requests can be explicitly resubmitted");
   if (invoice.vendorRiskDecision === "BLOCK" || invoice.policyDecision === "BLOCK") await blockInvoice(invoice, actor, requestId);
@@ -77,13 +112,14 @@ export async function resubmitInvoice(invoiceId: string, actor: Actor, requestId
   return { invoice: updated, idempotent: false };
 }
 
-async function handleDecision(invoiceId: string, actor: Actor, requestId: string, decision: "APPROVED" | "REJECTED", reason: string | undefined, idempotencyKey?: string) {
+async function handleDecision(invoiceId: string, actor: Actor, requestId: string, decision: "APPROVED" | "REJECTED", reason: string | undefined, idempotencyKey?: string, termsHash?: string) {
   requireReviewer(actor);
   const invoice = await findInvoice(invoiceId, actor.organizationId);
+  if (idempotencyKey && process.env.DEMO_MODE === "false") idempotencyKey = `${actor.id}:${idempotencyKey}`;
   if (idempotencyKey) {
     const previous = await prisma.approval.findUnique({ where: { idempotencyKey }, include: { invoice: true } });
     if (previous) {
-      if (previous.invoiceId !== invoice.id) throw new ApiError(409, "IDEMPOTENCY_KEY_REUSED", "Idempotency key was already used for another invoice");
+      if (previous.invoiceId !== invoice.id || previous.reviewerId !== actor.id || previous.decision !== decision || previous.approvalRound !== invoice.approvalRound) throw new ApiError(409, "IDEMPOTENCY_KEY_REUSED", "Idempotency key was already used for another invoice");
       return { invoice: await findInvoice(invoice.id, actor.organizationId), idempotent: true };
     }
   }
@@ -96,22 +132,64 @@ async function handleDecision(invoiceId: string, actor: Actor, requestId: string
   if (invoice.status === "REJECTED") throw new ApiError(409, "RESUBMIT_REQUIRED", "Rejected requests require explicit resubmission before review");
   if (invoice.status !== "REVIEW_REQUIRED") throw new ApiError(409, "INVALID_APPROVAL_STATE", "Only requests in review can be approved or rejected");
   const policy = await activePolicy(actor.organizationId);
-  if (actor.id === invoice.createdById && !policy.allowSelfApproval) throw new ApiError(403, "SELF_APPROVAL_NOT_ALLOWED", "The request creator cannot approve their own request");
+  if (actor.id === invoice.createdById && (process.env.DEMO_MODE === "false" || !policy.allowSelfApproval)) throw new ApiError(403, "SELF_APPROVAL_NOT_ALLOWED", "The request creator cannot approve their own request");
   if (invoice.vendorRiskDecision === "BLOCK" || invoice.policyDecision === "BLOCK") await blockInvoice(invoice, actor, requestId);
   assertTransition(invoice.status, decision);
-  const updated = await prisma.$transaction(async (tx) => {
-    await tx.approval.create({ data: { invoiceId: invoice.id, reviewerId: actor.id, decision, reason, idempotencyKey, approvalRound: invoice.approvalRound } });
-    return tx.invoice.update({
-      where: { id: invoice.id },
-      data: { status: decision, auditEvents: { create: { organizationId: actor.organizationId, actorId: actor.id, eventType: decision === "APPROVED" ? "INVOICE_APPROVED" : "INVOICE_REJECTED", description: decision === "APPROVED" ? "Invoice approved for payment processing" : "Invoice rejected by reviewer", metadataJson: JSON.stringify({ decision, reason, approvalRound: invoice.approvalRound }), requestId } } },
-      include: { vendor: true, lineItems: true, approvals: { orderBy: { createdAt: "desc" }, include: { reviewer: true } }, payment: true, auditEvents: { orderBy: { createdAt: "desc" } } },
+  const idempotent = await prisma.$transaction(async (tx) => {
+    const locked = await tx.invoice.updateMany({
+      where: { id: invoice.id, status: "REVIEW_REQUIRED", approvalRound: invoice.approvalRound },
+      data: { status: "REVIEW_REQUIRED" },
     });
+    if (!locked.count) {
+      const current = await tx.invoice.findUniqueOrThrow({ where: { id: invoice.id }, select: { status: true, approvalRound: true } });
+      if (current.approvalRound === invoice.approvalRound && current.status === "APPROVED" && decision === "APPROVED") return true;
+      throw new ApiError(409, "INVALID_APPROVAL_STATE", "The pending approval round has changed");
+    }
+
+    const recorded = await tx.approval.findUnique({
+      where: { invoiceId_reviewerId_approvalRound: { invoiceId: invoice.id, reviewerId: actor.id, approvalRound: invoice.approvalRound } },
+    });
+    if (recorded) {
+      if (recorded.decision !== decision) throw new ApiError(409, "APPROVAL_ALREADY_RECORDED", "A different decision was already recorded for this reviewer");
+      return true;
+    }
+
+    let payableTermsJson: string | undefined;
+    if (process.env.DEMO_MODE === "false" && decision === "APPROVED") {
+      const current = await tx.invoice.findUniqueOrThrow({ where: { id: invoice.id } });
+      payableTermsJson = await currentPayableTerms(tx, current);
+      if (termsHash !== hashPayableTerms(payableTermsJson)) {
+        throw new ApiError(409, "APPROVAL_TERMS_CHANGED", "Read and confirm the current payable terms before approving");
+      }
+      const staleDecision = await tx.approval.findFirst({
+        where: { invoiceId: current.id, approvalRound: current.approvalRound, decision: "APPROVED", OR: [
+          { payableTermsJson: null }, { payableTermsJson: { not: payableTermsJson } },
+        ] },
+      });
+      if (staleDecision) throw new ApiError(409, "APPROVAL_TERMS_CHANGED", "The payable terms changed during review");
+    }
+
+    await tx.approval.create({ data: { invoiceId: invoice.id, reviewerId: actor.id, decision, reason, idempotencyKey, payableTermsJson, approvalRound: invoice.approvalRound } });
+    const requiredApprovals = Math.max(1, invoice.requiredApprovals ?? 1);
+    const approvalsRecorded = await tx.approval.count({ where: { invoiceId: invoice.id, approvalRound: invoice.approvalRound, decision: "APPROVED" } });
+    const status = decision === "APPROVED" && approvalsRecorded < requiredApprovals ? "REVIEW_REQUIRED" : decision;
+    const eventType = status === "REVIEW_REQUIRED" ? "INVOICE_APPROVAL_RECORDED" : status === "APPROVED" ? "INVOICE_APPROVED" : "INVOICE_REJECTED";
+    await tx.invoice.update({
+      where: { id: invoice.id },
+      data: { status, auditEvents: { create: {
+        organizationId: actor.organizationId, actorId: actor.id, eventType,
+        description: status === "REVIEW_REQUIRED" ? "Approval recorded; more reviewers are required" : status === "APPROVED" ? "Invoice approved for payment processing" : "Invoice rejected by reviewer",
+        metadataJson: JSON.stringify({ decision, reason, approvalRound: invoice.approvalRound, approvalsRecorded, requiredApprovals }),
+        requestId,
+      } } },
+    });
+    return false;
   });
-  return { invoice: updated, idempotent: false };
+  return { invoice: await findInvoice(invoice.id, actor.organizationId), idempotent };
 }
 
-export function approveInvoice(invoiceId: string, actor: Actor, requestId: string, idempotencyKey?: string) {
-  return handleDecision(invoiceId, actor, requestId, "APPROVED", undefined, idempotencyKey);
+export function approveInvoice(invoiceId: string, actor: Actor, requestId: string, idempotencyKey?: string, termsHash?: string) {
+  return handleDecision(invoiceId, actor, requestId, "APPROVED", undefined, idempotencyKey, termsHash);
 }
 
 export function rejectInvoice(invoiceId: string, actor: Actor, requestId: string, reason: string, idempotencyKey?: string) {

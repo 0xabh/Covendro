@@ -130,8 +130,10 @@ describe("invoice API", () => {
   it("submits for review, prevents self-approval, and makes approval idempotent", async () => {
     const submitResponse = await app.inject({ method: "POST", url: `/api/invoices/${invoiceId}/submit`, headers: { "x-demo-user-email": "submitter@covendro.local" } });
     const selfApproval = await app.inject({ method: "POST", url: `/api/invoices/${invoiceId}/approve`, headers: { "x-demo-user-email": "submitter@covendro.local" } });
+    await prisma.invoice.update({ where: { id: invoiceId }, data: { requiredApprovals: 2 } });
     const approval = await app.inject({ method: "POST", url: `/api/invoices/${invoiceId}/approve`, headers: { "x-demo-user-email": "reviewer@covendro.local", "idempotency-key": `approval-${invoiceId}` } });
     const repeated = await app.inject({ method: "POST", url: `/api/invoices/${invoiceId}/approve`, headers: { "x-demo-user-email": "reviewer@covendro.local", "idempotency-key": `approval-${invoiceId}` } });
+    const secondApproval = await app.inject({ method: "POST", url: `/api/invoices/${invoiceId}/approve`, headers: { "x-demo-user-email": "treasury@covendro.local" } });
     const approvals = await prisma.approval.findMany({ where: { invoiceId } });
 
     expect(submitResponse.statusCode).toBe(200);
@@ -139,10 +141,32 @@ describe("invoice API", () => {
     expect(selfApproval.statusCode).toBe(403);
     expect(["REVIEWER_ROLE_REQUIRED", "SELF_APPROVAL_NOT_ALLOWED"]).toContain(selfApproval.json().error.code);
     expect(approval.statusCode).toBe(200);
-    expect(approval.json().data.invoice.status).toBe("APPROVED");
+    expect(approval.json().data.invoice.status).toBe("REVIEW_REQUIRED");
+    expect(secondApproval.statusCode).toBe(200);
+    expect(secondApproval.json().data.invoice.status).toBe("APPROVED");
     expect(repeated.statusCode).toBe(200);
     expect(repeated.json().data.idempotent).toBe(true);
-    expect(approvals).toHaveLength(1);
+    expect(approvals).toHaveLength(2);
+  });
+
+  it("blocks a new quote when the active policy is frozen after approval", async () => {
+    const invoice = await prisma.invoice.findUniqueOrThrow({ where: { id: invoiceId } });
+    const policy = await prisma.treasuryPolicy.findFirstOrThrow({
+      where: { organizationId: invoice.organizationId, active: true },
+    });
+    await prisma.treasuryPolicy.update({ where: { id: policy.id }, data: { freezePayments: true } });
+    try {
+      const response = await app.inject({
+        method: "POST",
+        url: `/api/invoices/${invoiceId}/quote`,
+        headers: { "x-demo-user-email": "reviewer@covendro.local" },
+      });
+      expect(response.statusCode).toBe(409);
+      expect(response.json().error.code).toBe("PAYMENT_BLOCKED");
+      expect(await prisma.payment.findUnique({ where: { invoiceId } })).toBeNull();
+    } finally {
+      await prisma.treasuryPolicy.update({ where: { id: policy.id }, data: { freezePayments: policy.freezePayments } });
+    }
   });
 
   it("creates an idempotent mock quote and simulates successful settlement", async () => {

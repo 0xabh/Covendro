@@ -47,6 +47,7 @@ model User {
   nearAccountId   String?
   createdAt       DateTime     @default(now())
   organization    Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  workspaceCredentials WorkspaceCredential[]
   invoicesCreated Invoice[]    @relation("InvoiceCreator")
   approvals       Approval[]
   auditEvents     AuditEvent[]
@@ -65,6 +66,7 @@ model Vendor {
   createdAt      DateTime     @default(now())
   updatedAt      DateTime     @updatedAt
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  destinations   VendorDestination[]
   invoices       Invoice[]
 
   @@unique([organizationId, accountAddress])
@@ -114,6 +116,8 @@ model Invoice {
   ledgerEntry          LedgerEntry?
   auditEvents          AuditEvent[]
 
+  livePaymentAttempts LivePaymentAttempt[]
+
   @@unique([organizationId, vendorId, invoiceNumber])
   @@index([organizationId, status])
   @@index([organizationId, dueDate])
@@ -159,6 +163,7 @@ model Approval {
   decision   String
   reason     String?
   idempotencyKey String? @unique
+  payableTermsJson String?
   approvalRound Int      @default(1)
   createdAt  DateTime @default(now())
   invoice    Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
@@ -241,4 +246,62 @@ model AuditEvent {
   @@index([organizationId, createdAt])
   @@index([invoiceId, createdAt])
   @@index([eventType, createdAt])
+}
+
+model WorkspaceCredential {
+  digest    String   @id
+  userId    String
+  purpose   String
+  expiresAt DateTime
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model VendorDestination {
+  id           String    @id @default(cuid())
+  vendorId     String
+  chain        String
+  address      String
+  proposedById String
+  verifiedById String?
+  verifiedAt   DateTime?
+  revokedAt    DateTime?
+  createdAt    DateTime  @default(now())
+  vendor       Vendor    @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+
+  @@index([vendorId, chain, address])
+}
+
+model LivePaymentAttempt {
+  id String @id @default(cuid())
+  organizationId String
+  invoiceId String
+  activeInvoiceId String? @unique
+  preparedById String
+  status String @default("PREPARED")
+  payableTermsJson String
+  sourceAsset String
+  sourceContract String
+  destinationAsset String
+  destinationContract String
+  originDebitAtomic String
+  destinationAmountAtomic String
+  refundFeeAtomic String?
+  withdrawFeeAtomic String?
+  slippageBps Int
+  depositAccountId String
+  depositMemo String?
+  quoteHash String @unique
+  providerCorrelationId String?
+  quoteExpiresAt DateTime
+  reservationDay String?
+  reservedDebitAtomic String?
+  handedOffAt DateTime?
+  fundingTxHash String? @unique
+  createdAt DateTime @default(now())
+  invoice Invoice @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+
+  @@index([organizationId, sourceAsset, reservationDay])
+  @@index([invoiceId, createdAt])
 }

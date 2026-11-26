@@ -1,23 +1,14 @@
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyRequest } from "fastify";
 import { csvToList, policyToSnapshot, treasuryPolicyUpdateSchema } from "@covendro/shared";
 import { prisma } from "../db/prisma.js";
 import { ApiError } from "../errors.js";
-import { getDemoUser } from "../repositories/organization-repository.js";
+import { requireWorkspaceUser } from "../services/workspace-access.js";
+import { lockTreasuryWorkspace } from "../services/treasury-lock.js";
 import { assessInvoiceControls } from "../services/risk-assessment-service.js";
 
-function getUserEmail(request: { headers: Record<string, unknown> }) {
-  const header = request.headers["x-demo-user-email"];
-  return typeof header === "string" && header.length > 0 ? header : "submitter@covendro.local";
-}
 
-async function requireUser(request: { headers: Record<string, unknown> }) {
-  const user = await getDemoUser(getUserEmail(request));
-  if (!user) throw new ApiError(401, "DEMO_USER_NOT_FOUND", "Choose a seeded demo user before continuing");
-  return user;
-}
-
-async function requireTreasuryAdmin(request: { headers: Record<string, unknown> }) {
-  const user = await requireUser(request);
+async function requireTreasuryAdmin(request: FastifyRequest) {
+  const user = await requireWorkspaceUser(request, "submitter@covendro.local");
   if (user.role !== "TREASURY_ADMINISTRATOR") throw new ApiError(403, "TREASURY_ADMIN_REQUIRED", "Only the treasury administrator can change policy");
   return user;
 }
@@ -45,6 +36,7 @@ async function createPolicyVersion(input: {
   description: string;
 }) {
   return prisma.$transaction(async (tx) => {
+    await lockTreasuryWorkspace(tx, input.organizationId);
     const current = await tx.treasuryPolicy.findFirst({ where: { id: input.currentId, organizationId: input.organizationId, active: true } });
     if (!current) throw new ApiError(404, "POLICY_NOT_FOUND", "Active treasury policy was not found");
     await tx.treasuryPolicy.updateMany({ where: { organizationId: input.organizationId, active: true }, data: { active: false } });
@@ -82,7 +74,7 @@ async function createPolicyVersion(input: {
 
 export function registerTreasuryRoutes(app: FastifyInstance) {
   app.get("/api/policies", async (request) => {
-    const user = await requireUser(request);
+    const user = await requireWorkspaceUser(request, "submitter@covendro.local");
     const [policies, treasuryIdentity] = await Promise.all([
       prisma.treasuryPolicy.findMany({ where: { organizationId: user.organizationId }, orderBy: { version: "desc" } }),
       prisma.treasuryIdentity.findFirst({ where: { organizationId: user.organizationId }, orderBy: { createdAt: "asc" } }),
@@ -124,13 +116,13 @@ export function registerTreasuryRoutes(app: FastifyInstance) {
   }
 
   app.get("/api/vendors", async (request) => {
-    const user = await requireUser(request);
-    const vendors = await prisma.vendor.findMany({ where: { organizationId: user.organizationId }, include: { _count: { select: { invoices: true } } }, orderBy: { name: "asc" } });
+    const user = await requireWorkspaceUser(request, "submitter@covendro.local");
+    const vendors = await prisma.vendor.findMany({ where: { organizationId: user.organizationId }, include: { _count: { select: { invoices: true } }, destinations: { orderBy: { createdAt: "desc" } } }, orderBy: { name: "asc" } });
     return { data: vendors };
   });
 
   app.get<{ Params: { id: string }; Querystring: { invoiceId?: string } }>("/api/vendors/:id/risk", async (request) => {
-    const user = await requireUser(request);
+    const user = await requireWorkspaceUser(request, "submitter@covendro.local");
     const vendor = await prisma.vendor.findFirst({ where: { id: request.params.id, organizationId: user.organizationId } });
     if (!vendor) throw new ApiError(404, "VENDOR_NOT_FOUND", "Vendor was not found");
     if (!request.query.invoiceId) return { data: { vendor, risk: { decision: vendor.riskStatus, reasons: ["Risk is based on the latest persisted vendor assessment."], riskScore: null } } };

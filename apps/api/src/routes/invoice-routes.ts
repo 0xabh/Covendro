@@ -12,22 +12,13 @@ import {
 } from "@covendro/shared";
 import { prisma } from "../db/prisma.js";
 import { ApiError } from "../errors.js";
-import { getDemoUser } from "../repositories/organization-repository.js";
+import { assessInvoiceControls, persistInvoiceControls } from "../services/risk-assessment-service.js";
+import { requireWorkspaceUser } from "../services/workspace-access.js";
 import { parseSourceDocument } from "../services/document-parser.js";
 import { analyzeInvoice } from "../services/ai/invoice-analysis-service.js";
 
 const fixturesDirectory = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../../fixtures");
 
-function getUserEmail(request: { headers: Record<string, unknown> }) {
-  const header = request.headers["x-demo-user-email"];
-  return typeof header === "string" && header.length > 0 ? header : "submitter@covendro.local";
-}
-
-async function requireDemoUser(request: { headers: Record<string, unknown> }) {
-  const user = await getDemoUser(getUserEmail(request));
-  if (!user) throw new ApiError(401, "DEMO_USER_NOT_FOUND", "Choose a seeded demo user before creating invoices");
-  return user;
-}
 
 function parseDate(value: string) {
   return new Date(`${value}T00:00:00.000Z`);
@@ -92,7 +83,7 @@ export function registerInvoiceRoutes(app: FastifyInstance) {
   });
 
   app.get("/api/invoices", async (request) => {
-    const user = await requireDemoUser(request);
+    const user = await requireWorkspaceUser(request, "submitter@covendro.local");
     const invoices = await prisma.invoice.findMany({
       where: { organizationId: user.organizationId },
       include: { vendor: true, lineItems: true, createdBy: true },
@@ -107,7 +98,8 @@ export function registerInvoiceRoutes(app: FastifyInstance) {
       throw new ApiError(422, "INVOICE_VALIDATION_FAILED", "Invoice fields need attention", validationDetails(parsed.error));
     }
 
-    const user = await requireDemoUser(request);
+    const user = await requireWorkspaceUser(request, "submitter@covendro.local");
+    if (process.env.DEMO_MODE === "false" && user.role !== "SUBMITTER") throw new ApiError(403, "SUBMITTER_REQUIRED", "Only a submitter can create an invoice");
     const input = parsed.data;
     const normalized = normalizeInput(input);
     const vendor = await prisma.vendor.upsert({
@@ -173,7 +165,7 @@ export function registerInvoiceRoutes(app: FastifyInstance) {
   });
 
   app.get<{ Params: { id: string } }>("/api/invoices/:id", async (request) => {
-    const user = await requireDemoUser(request);
+    const user = await requireWorkspaceUser(request, "submitter@covendro.local");
     const invoice = await prisma.invoice.findFirst({
       where: { id: request.params.id, organizationId: user.organizationId },
       include: { vendor: true, lineItems: true, createdBy: true, approvals: { orderBy: { createdAt: "desc" }, include: { reviewer: true } }, payment: true, auditEvents: { orderBy: { createdAt: "desc" } } },
@@ -183,7 +175,19 @@ export function registerInvoiceRoutes(app: FastifyInstance) {
   });
 
   app.post<{ Params: { id: string } }>("/api/invoices/:id/analyze", async (request) => {
-    const user = await requireDemoUser(request);
+    const user = await requireWorkspaceUser(request, "submitter@covendro.local");
+    if (process.env.DEMO_MODE === "false") {
+      const invoice = await prisma.invoice.findFirst({
+        where: { id: request.params.id, organizationId: user.organizationId },
+      });
+      if (!invoice) throw new ApiError(404, "INVOICE_NOT_FOUND", "Invoice was not found");
+      if (invoice.createdById !== user.id || invoice.status !== "DRAFT") {
+        throw new ApiError(409, "INVOICE_NOT_CONFIRMABLE", "Only the creator can confirm a draft's fields");
+      }
+      const controls = await assessInvoiceControls(invoice.id, user.organizationId);
+      const confirmed = await persistInvoiceControls(invoice.id, user.organizationId, user.id, request.id, controls, true);
+      return { data: { invoice: confirmed, controls } };
+    }
     const result = await analyzeInvoice(request.params.id, user.organizationId, request.id);
     return { data: result };
   });

@@ -2,7 +2,8 @@
 
 import { ChangeEvent, FormEvent, useEffect, useState } from "react";
 
-const apiBase = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
+import { useWorkspaceRole } from "../../../components/app-shell";
+import { apiBase, apiFetch, pilotMode } from "../../../lib/api";
 
 type LineItem = { description: string; quantity: string; unitAmount: string };
 type InvoiceForm = {
@@ -48,19 +49,22 @@ function formFromFixture(invoice: Partial<InvoiceForm>, sourceDocument?: Invoice
 }
 
 export default function NewInvoicePage() {
+  const role = useWorkspaceRole();
   const [form, setForm] = useState<InvoiceForm>(blankForm);
   const [fixtures, setFixtures] = useState<Array<{ name: string; invoice: Partial<InvoiceForm> }>>([]);
   const [message, setMessage] = useState<{ kind: "error" | "success"; text: string } | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
-    fetch(`${apiBase}/api/invoices/fixtures`)
+    if (pilotMode) return;
+    apiFetch(`${apiBase}/api/invoices/fixtures`)
       .then((response) => response.json())
       .then((result) => { setFixtures(result.data ?? []); })
       .catch(() => setFixtures([]));
   }, []);
 
   useEffect(() => {
+    if (pilotMode) return;
     const fixtureName = new URLSearchParams(window.location.search).get("fixture");
     if (!fixtureName) return;
     void loadFixture(fixtureName);
@@ -80,7 +84,7 @@ export default function NewInvoicePage() {
 
   async function loadFixture(name: string) {
     if (!name) return;
-    const response = await fetch(`${apiBase}/api/invoices/fixtures/${name}`);
+    const response = await apiFetch(`${apiBase}/api/invoices/fixtures/${name}`);
     const result = await response.json();
     const fixture = result.data.invoice as Partial<InvoiceForm>;
     setForm(formFromFixture(fixture, { fileName: name, fileType: "application/json", content: JSON.stringify(fixture) }));
@@ -103,7 +107,7 @@ export default function NewInvoicePage() {
         content = await file.text();
       }
 
-      const response = await fetch(`${apiBase}/api/invoices/parse-document`, {
+      const response = await apiFetch(`${apiBase}/api/invoices/parse-document`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ fileName: file.name, fileType: file.type || (isPdf ? "application/pdf" : "text/plain"), content, encoding }),
@@ -122,7 +126,7 @@ export default function NewInvoicePage() {
     setSubmitting(true);
     setMessage(null);
     try {
-      const response = await fetch(`${apiBase}/api/invoices`, {
+      const response = await apiFetch(`${apiBase}/api/invoices`, {
         method: "POST",
         headers: { "content-type": "application/json", "x-demo-user-email": "submitter@covendro.local" },
         body: JSON.stringify(form),
@@ -140,22 +144,28 @@ export default function NewInvoicePage() {
     }
   }
 
+  if (pilotMode && role !== "SUBMITTER") {
+    return <main className="page-shell narrow-page"><section className="panel">
+      <h1>New invoice</h1><p>Ask a workspace submitter to create the invoice.</p><a href="/invoices">View invoices</a>
+    </section></main>;
+  }
+
   return (
     <main className="page-shell narrow-page">
       <header className="page-header">
-        <div><p className="eyebrow">New payable</p><h1>Upload an invoice</h1><p className="muted">JSON fixtures and manual entry are supported. Original document content is hashed and discarded after processing.</p></div>
+        <div><p className="eyebrow">New payable</p><h1>Upload an invoice</h1><p className="muted">{pilotMode ? "Upload a text PDF, JSON or text file, or enter the invoice manually." : "JSON fixtures and manual entry are supported. Original document content is hashed and discarded after processing."}</p></div>
       </header>
-      <div className="page-nav"><a href="/invoices">← Invoices</a><span>Demo mode · Submitter</span></div>
+      <div className="page-nav"><a href="/invoices">← Invoices</a>{!pilotMode && <span>Demo mode · Submitter</span>}</div>
 
       {message && <div className={message.kind === "error" ? "form-message error-state" : "form-message success-state"}>{message.text}</div>}
 
       <section className="panel upload-tools">
-        <div><strong>Start from a fictional fixture</strong><p className="muted">Fixtures are safe demo data and never represent a real person or company.</p></div>
+        {!pilotMode && <div><strong>Start from a fictional fixture</strong><p className="muted">Fixtures are safe demo data and never represent a real person or company.</p></div>}
         <div className="tool-row">
-          <select aria-label="Sample invoice" defaultValue="" onChange={(event) => void loadFixture(event.target.value)}>
+          {!pilotMode && <select aria-label="Sample invoice" defaultValue="" onChange={(event) => void loadFixture(event.target.value)}>
             <option value="">Choose a sample invoice…</option>
             {fixtures.map((fixture) => <option key={fixture.name} value={fixture.name}>{fixture.name}</option>)}
-          </select>
+          </select>}
           <label className="file-button">Upload document<input type="file" accept="application/json,text/plain,application/pdf,.json,.txt,.pdf" onChange={(event) => void handleFile(event)} /></label>
         </div>
       </section>

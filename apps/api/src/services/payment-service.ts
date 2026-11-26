@@ -4,6 +4,8 @@ import { prisma } from "../db/prisma.js";
 import { ApiError } from "../errors.js";
 import { getPaymentRail } from "./payments/payment-rail-factory.js";
 import { MockPaymentRail } from "./payments/mock-payment-rail.js";
+import { currentPayableTerms } from "./payable-terms.js";
+import { assessInvoiceControls } from "./risk-assessment-service.js";
 import { syncLedgerEntry } from "./ledger-service.js";
 
 type Actor = { id: string; role: string; organizationId: string };
@@ -40,12 +42,21 @@ export async function createPaymentQuote(invoiceId: string, actor: Actor, reques
   if (invoice.status !== "APPROVED") throw new ApiError(409, "INVOICE_NOT_APPROVED", "Only approved invoices can receive a payment quote");
   if (invoice.vendorRiskDecision === "BLOCK" || invoice.policyDecision === "BLOCK") throw new ApiError(409, "PAYMENT_BLOCKED", "Treasury policy or vendor risk blocked this payment");
 
+  const controls = await assessInvoiceControls(invoice.id, actor.organizationId);
+  if (controls.policy.decision === "BLOCK" || controls.vendorRisk.decision === "BLOCK") {
+    throw new ApiError(409, "PAYMENT_BLOCKED", "The current treasury policy or vendor risk blocks this payment");
+  }
+
   const rail = getPaymentRail();
   const treasuryIdentity = await prisma.treasuryIdentity.findFirst({ where: { organizationId: actor.organizationId }, orderBy: { createdAt: "asc" } });
   // Live 1Click quotes validate the refund account on the origin chain. The
   // seeded demo identity is intentionally fictional, so prefer the explicit
   // integration setting when the real dry-quote adapter is configured.
-  const refundDestination = process.env.NEAR_INTENTS_REFUND_TO ?? treasuryIdentity?.nearAccountId ?? "treasury.covendro.testnet";
+  const pilotMode = process.env.DEMO_MODE === "false";
+  const refundDestination = pilotMode ? treasuryIdentity?.nearAccountId : process.env.NEAR_INTENTS_REFUND_TO ?? treasuryIdentity?.nearAccountId ?? "treasury.covendro.testnet";
+  if (!refundDestination || (pilotMode && (treasuryIdentity?.demoIdentity || refundDestination.endsWith(".testnet")))) {
+    throw new ApiError(409, "PILOT_TREASURY_REQUIRED", "Configure the workspace mainnet treasury before requesting a quote");
+  }
   const destinationChain = invoice.paymentChain ?? invoice.vendor.accountChain ?? "near";
   const quoteInput: PaymentQuoteInput = {
     paymentId: invoice.payment?.id ?? `payment-${invoice.id}`,
@@ -59,26 +70,74 @@ export async function createPaymentQuote(invoiceId: string, actor: Actor, reques
     deadline: new Date(Date.now() + 5 * 60 * 1000).toISOString(),
   };
 
-  const payment = invoice.payment
-    ? await prisma.payment.update({ where: { id: invoice.payment.id }, data: { status: "QUOTE_REQUESTED", rail: rail.name, quoteMode: null, providerStatus: "REQUESTED", quoteId: null, idempotencyKey } })
-    : await prisma.payment.create({ data: { organizationId: actor.organizationId, invoiceId: invoice.id, status: "QUOTE_REQUESTED", rail: rail.name, amountMinor: invoice.amountMinor, idempotencyKey } });
-  await prisma.invoice.update({ where: { id: invoice.id }, data: { status: "QUOTE_REQUESTED", auditEvents: { create: { organizationId: actor.organizationId, actorId: actor.id, eventType: "PAYMENT_QUOTE_REQUESTED", description: `Payment quote requested through ${rail.name}`, metadataJson: JSON.stringify({ rail: rail.name, mode: rail.mode }), requestId } } } });
+  const payment = await prisma.$transaction(async (tx) => {
+    const claimed = await tx.invoice.updateMany({
+      where: { id: invoice.id, organizationId: actor.organizationId, status: "APPROVED", approvalRound: invoice.approvalRound },
+      data: { status: "QUOTE_REQUESTED" },
+    });
+    if (!claimed.count) return null;
+
+    const activePolicy = await tx.treasuryPolicy.findFirst({
+      where: { organizationId: actor.organizationId, active: true },
+      select: { version: true, freezePayments: true },
+      orderBy: { version: "desc" },
+    });
+    if (!activePolicy || activePolicy.freezePayments) {
+      throw new ApiError(409, "PAYMENT_BLOCKED", "Treasury policy does not permit a new quote");
+    }
+    if (activePolicy.version !== controls.policySnapshot.version) {
+      throw new ApiError(409, "TREASURY_POLICY_CHANGED", "Treasury policy changed while preparing the quote. Request a fresh quote");
+    }
+
+    if (pilotMode) {
+      const approvedInvoice = await tx.invoice.findUniqueOrThrow({ where: { id: invoice.id } });
+      const payableTermsJson = await currentPayableTerms(tx, approvedInvoice);
+      const matchingApprovals = await tx.approval.count({
+        where: { invoiceId: invoice.id, approvalRound: invoice.approvalRound, decision: "APPROVED", payableTermsJson },
+      });
+      if (matchingApprovals < Math.max(1, approvedInvoice.requiredApprovals ?? 1)) {
+        throw new ApiError(409, "APPROVAL_TERMS_CHANGED", "The current payable needs fresh reviewer approval");
+      }
+    }
+
+    const current = await tx.payment.findUnique({ where: { invoiceId: invoice.id } });
+    const payment = current
+      ? await tx.payment.update({
+          where: { id: current.id },
+          data: { status: "QUOTE_REQUESTED", rail: rail.name, quoteMode: null, providerStatus: "REQUESTED", quoteId: null, idempotencyKey },
+        })
+      : await tx.payment.create({
+          data: { organizationId: actor.organizationId, invoiceId: invoice.id, status: "QUOTE_REQUESTED", rail: rail.name, amountMinor: invoice.amountMinor, idempotencyKey },
+        });
+    await tx.auditEvent.create({
+      data: { organizationId: actor.organizationId, invoiceId: invoice.id, paymentId: payment.id, actorId: actor.id, eventType: "PAYMENT_QUOTE_REQUESTED", description: `Payment quote requested through ${rail.name}`, metadataJson: JSON.stringify({ rail: rail.name, mode: rail.mode }), requestId },
+    });
+    return payment;
+  });
+  if (!payment) {
+    const existing = await prisma.payment.findUnique({ where: { invoiceId: invoice.id } });
+    if (existing && ["QUOTE_REQUESTED", "QUOTE_READY", "PAYMENT_PENDING", "PAID"].includes(existing.status)) {
+      return { payment: await findPayment(existing.id, actor.organizationId), idempotent: true };
+    }
+    throw new ApiError(409, "INVOICE_NOT_APPROVED", "The invoice is no longer approved for quoting");
+  }
 
   try {
     const quote = await rail.createQuote({ ...quoteInput, paymentId: payment.id });
-    const updated = await prisma.$transaction(async (tx) => {
+    await prisma.$transaction(async (tx) => {
       const savedPayment = await tx.payment.update({ where: { id: payment.id }, data: { status: "QUOTE_READY", quoteId: quote.quoteId, quoteMode: quote.mode, providerStatus: quote.providerStatus, quoteRequestId: quote.requestId, sourceAsset: quote.sourceAsset, destinationAsset: quote.destinationAsset, sourceChain: quote.sourceChain, destinationChain: quote.destinationChain, estimatedReceivedMinor: quote.estimatedReceivedMinor, slippageBps: quote.slippageBps, quoteExpiresAt: new Date(quote.quoteExpiresAt), refundDestination: quote.refundDestination, depositAddress: quote.depositAddress, depositMemo: quote.depositMemo, depositRequirementsJson: quote.depositRequirements ? JSON.stringify(quote.depositRequirements) : null } });
       await tx.invoice.update({ where: { id: invoice.id }, data: { status: "QUOTE_READY", auditEvents: { create: { organizationId: actor.organizationId, actorId: actor.id, eventType: "QUOTE_GENERATED", description: `Payment quote ready through ${rail.name}`, metadataJson: JSON.stringify({ quoteId: quote.quoteId, mode: quote.mode, providerStatus: quote.providerStatus }), requestId } } } });
-      const approval = await tx.approval.findFirst({ where: { invoiceId: invoice.id, decision: "APPROVED" }, orderBy: { createdAt: "asc" } });
+      const approval = await tx.approval.findFirst({ where: { invoiceId: invoice.id, approvalRound: invoice.approvalRound, decision: "APPROVED" }, orderBy: { createdAt: "desc" } });
       await syncLedgerEntry(tx, { invoiceId: invoice.id, paymentId: savedPayment.id, grossAmountMinor: invoice.amountMinor, currency: invoice.currency, paymentStatus: "QUOTE_READY", paymentRail: savedPayment.rail, quoteId: savedPayment.quoteId, refundStatus: savedPayment.refundStatus, approvedAt: approval?.createdAt });
-      return savedPayment;
     });
-    return { payment: await findPayment(updated.id, actor.organizationId), idempotent: false };
   } catch (error) {
-    await prisma.payment.update({ where: { id: payment.id }, data: { status: "FAILED", providerStatus: "QUOTE_FAILED" } });
-    await prisma.invoice.update({ where: { id: invoice.id, status: "QUOTE_REQUESTED" }, data: { status: "APPROVED", auditEvents: { create: { organizationId: actor.organizationId, actorId: actor.id, eventType: "QUOTE_FAILED", description: "Payment quote request failed", metadataJson: JSON.stringify({ rail: rail.name }), requestId } } } });
+    await prisma.$transaction([
+      prisma.payment.update({ where: { id: payment.id }, data: { status: "FAILED", providerStatus: "QUOTE_FAILED" } }),
+      prisma.invoice.update({ where: { id: invoice.id, status: "QUOTE_REQUESTED" }, data: { status: "APPROVED", auditEvents: { create: { organizationId: actor.organizationId, actorId: actor.id, eventType: "QUOTE_FAILED", description: "Payment quote request failed", metadataJson: JSON.stringify({ rail: rail.name }), requestId } } } }),
+    ]);
     throw new ApiError(502, "PAYMENT_QUOTE_FAILED", error instanceof Error ? error.message : "Payment quote failed");
   }
+  return { payment: await findPayment(payment.id, actor.organizationId), idempotent: false };
 }
 
 export async function simulatePayment(paymentId: string, actor: Actor, outcome: PaymentOutcome, requestId: string) {

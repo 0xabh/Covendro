@@ -1,12 +1,8 @@
 import type { FastifyInstance } from "fastify";
-import { prisma } from "../db/prisma.js";
 import { ApiError } from "../errors.js";
-import { getDemoUser } from "../repositories/organization-repository.js";
-
-function getUserEmail(request: { headers: Record<string, unknown> }) {
-  const header = request.headers["x-demo-user-email"];
-  return typeof header === "string" && header.length > 0 ? header : "treasury@covendro.local";
-}
+import { prisma } from "../db/prisma.js";
+import { getPaymentRail } from "../services/payments/payment-rail-factory.js";
+import { requireWorkspaceUser } from "../services/workspace-access.js";
 
 async function verifyNearAccount(accountId: string, rpcUrl: string) {
   const controller = new AbortController();
@@ -33,21 +29,27 @@ async function verifyNearAccount(accountId: string, rpcUrl: string) {
 
 export function registerIntegrationRoutes(app: FastifyInstance) {
   app.get<{ Querystring: { verifyAccount?: string } }>("/api/integrations/status", async (request) => {
-    const user = await getDemoUser(getUserEmail(request));
-    if (!user) throw new ApiError(401, "DEMO_USER_NOT_FOUND", "Choose a seeded demo user before continuing");
+    const user = await requireWorkspaceUser(request, "treasury@covendro.local");
     const [treasuryIdentity] = await prisma.treasuryIdentity.findMany({ where: { organizationId: user.organizationId }, orderBy: { createdAt: "asc" }, take: 1 });
+    const pilotMode = process.env.DEMO_MODE === "false";
     const forceMocks = process.env.COVENDRO_FORCE_MOCKS === "true";
-    const aiConfigured = Boolean(process.env.NEAR_AI_CLOUD_API_KEY) && !forceMocks;
-    const intentsConfigured = Boolean(process.env.NEAR_INTENTS_JWT && process.env.NEAR_INTENTS_ORIGIN_ASSET_ID && process.env.NEAR_INTENTS_DESTINATION_ASSET_ID) && !forceMocks;
-    const accountId = process.env.NEAR_TREASURY_ACCOUNT_ID || treasuryIdentity?.nearAccountId || null;
-    const shouldVerify = request.query.verifyAccount === "true" && Boolean(process.env.NEAR_TREASURY_ACCOUNT_ID) && !forceMocks;
+    const aiConfigured = !pilotMode && Boolean(process.env.NEAR_AI_CLOUD_API_KEY) && !forceMocks;
+    let paymentRail;
+    try {
+      paymentRail = getPaymentRail();
+    } catch (error) {
+      if (!(error instanceof ApiError) || error.code !== "PAYMENT_RAIL_UNAVAILABLE") throw error;
+    }
+    const configuredDemoAccount = pilotMode ? undefined : process.env.NEAR_TREASURY_ACCOUNT_ID;
+    const accountId = configuredDemoAccount || treasuryIdentity?.nearAccountId || null;
+    const shouldVerify = request.query.verifyAccount === "true" && Boolean(configuredDemoAccount) && !forceMocks;
     const accountVerification = shouldVerify
-      ? await verifyNearAccount(process.env.NEAR_TREASURY_ACCOUNT_ID!, process.env.NEAR_TREASURY_RPC_URL || "https://rpc.mainnet.near.org")
-      : { state: process.env.NEAR_TREASURY_ACCOUNT_ID ? "NOT_REQUESTED" : "DEMO_IDENTITY" };
+      ? await verifyNearAccount(configuredDemoAccount!, process.env.NEAR_TREASURY_RPC_URL || "https://rpc.mainnet.near.org")
+      : { state: pilotMode ? "NOT_VERIFIED" : configuredDemoAccount ? "NOT_REQUESTED" : "DEMO_IDENTITY" };
     return {
       data: {
-        ai: { configured: aiConfigured, provider: aiConfigured ? "NearAICloudProvider" : "MockInvoiceAIProvider", model: process.env.NEAR_AI_CLOUD_MODEL || "google/gemini-2.5-flash-lite", verificationState: aiConfigured ? "UNVERIFIED" : "MOCKED" },
-        intents: { configured: intentsConfigured, provider: intentsConfigured ? "NearIntentsPaymentRail" : "MockPaymentRail", mode: intentsConfigured ? "REAL_DRY" : "MOCK", executionEnabled: process.env.REAL_PAYMENTS_ENABLED === "true" && process.env.NEAR_INTENTS_DRY_RUN === "false" },
+        ai: { configured: aiConfigured, provider: pilotMode ? "Manual confirmation" : aiConfigured ? "NearAICloudProvider" : "MockInvoiceAIProvider", model: pilotMode ? null : process.env.NEAR_AI_CLOUD_MODEL || "google/gemini-2.5-flash-lite", verificationState: pilotMode ? "MANUAL" : aiConfigured ? "UNVERIFIED" : "MOCKED" },
+        intents: { configured: paymentRail?.mode === "REAL_DRY", provider: paymentRail?.name ?? "Unavailable", mode: paymentRail?.mode ?? "UNAVAILABLE", executionEnabled: false },
         treasury: { accountId, identityName: treasuryIdentity?.name ?? "No treasury identity", keyType: treasuryIdentity?.keyType ?? "FUNCTION_CALL", permissionScope: treasuryIdentity?.accessKeyPermissionScope ?? "No transfer authority stored", accountVerification },
       },
     };

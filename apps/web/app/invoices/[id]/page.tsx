@@ -2,9 +2,11 @@
 
 import { useParams } from "next/navigation";
 import { useEffect, useState } from "react";
+import { useWorkspaceRole } from "../../../components/app-shell";
+import { LivePaymentPanel } from "../../../components/live-payment-panel";
 import { VerificationPanel } from "../../../components/verification-panel";
 
-const apiBase = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
+import { apiBase, apiFetch, pilotMode } from "../../../lib/api";
 
 type InvoiceDetail = {
   id: string;
@@ -25,7 +27,7 @@ type InvoiceDetail = {
   extractionConfidence?: number | null;
   extractionRequestId?: string | null;
   analysisCompletedAt?: string | null;
-  verificationState?: "MOCKED" | "UNVERIFIED" | "VERIFIED" | "VERIFICATION_FAILED" | null;
+  verificationState?: "MOCKED" | "UNVERIFIED" | "VERIFIED" | "VERIFICATION_FAILED" | "HUMAN_VERIFIED" | null;
   verificationExplanation?: string | null;
   anomalyResultJson?: string | null;
   vendorRiskDecision?: string | null;
@@ -44,6 +46,10 @@ type InvoiceDetail = {
 };
 
 export default function InvoiceDetailPage() {
+  const role = useWorkspaceRole();
+  const canSubmit = !pilotMode || role === "SUBMITTER";
+  const canReview = !pilotMode || role === "REVIEWER" || role === "TREASURY_ADMINISTRATOR";
+  const canRestart = canSubmit || role === "TREASURY_ADMINISTRATOR";
   const params = useParams<{ id: string }>();
   const [invoice, setInvoice] = useState<InvoiceDetail | null>(null);
   const [state, setState] = useState<"loading" | "ready" | "error">("loading");
@@ -52,6 +58,9 @@ export default function InvoiceDetailPage() {
   const [workflowState, setWorkflowState] = useState<"idle" | "working" | "error">("idle");
   const [workflowMessage, setWorkflowMessage] = useState("");
   const [rejectionReason, setRejectionReason] = useState("");
+  const [approvalTerms, setApprovalTerms] = useState<{
+    termsHash: string; terms: { sourceAccountId: string; refundAccountId: string; destinationAddress: string; maxAuthorizedDebitMinor?: number };
+  } | null>(null);
   const [quoteState, setQuoteState] = useState<"idle" | "working">("idle");
 
   const anomalies = invoice?.anomalyResultJson ? (() => {
@@ -67,7 +76,7 @@ export default function InvoiceDetailPage() {
     setAnalysisState("working");
     setAnalysisError("");
     try {
-      const response = await fetch(`${apiBase}/api/invoices/${invoice.id}/analyze`, { method: "POST" });
+      const response = await apiFetch(`${apiBase}/api/invoices/${invoice.id}/analyze`, { method: "POST" });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error?.message ?? "Analysis failed");
       setInvoice(result.data.invoice);
@@ -78,23 +87,38 @@ export default function InvoiceDetailPage() {
     }
   }
 
+  async function loadApprovalTerms() {
+    if (!invoice) return;
+    setWorkflowMessage("");
+    try {
+      const response = await apiFetch(`${apiBase}/api/invoices/${invoice.id}/payable-terms`);
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error?.message ?? "Could not load payable terms");
+      setApprovalTerms(result.data);
+    } catch (failure) {
+      setWorkflowState("error");
+      setWorkflowMessage(failure instanceof Error ? failure.message : "Could not load payable terms");
+    }
+  }
+
   async function workflowAction(action: "submit" | "resubmit" | "approve" | "reject") {
     if (!invoice) return;
     setWorkflowState("working"); setWorkflowMessage("");
     const isReviewerAction = action === "approve" || action === "reject";
     try {
-      const response = await fetch(`${apiBase}/api/invoices/${invoice.id}/${action}`, {
+      const response = await apiFetch(`${apiBase}/api/invoices/${invoice.id}/${action}`, {
         method: "POST",
         headers: {
-          ...(action === "reject" ? { "content-type": "application/json" } : {}),
+          ...(action === "reject" || (pilotMode && action === "approve") ? { "content-type": "application/json" } : {}),
           "x-demo-user-email": isReviewerAction ? "reviewer@covendro.local" : "submitter@covendro.local",
           ...(isReviewerAction ? { "idempotency-key": `ui-${action}-${invoice.id}-${invoice.approvalRound ?? 1}` } : {}),
         },
-        body: action === "reject" ? JSON.stringify({ reason: rejectionReason }) : undefined,
+        body: action === "reject" ? JSON.stringify({ reason: rejectionReason }) : pilotMode && action === "approve" ? JSON.stringify({ termsHash: approvalTerms?.termsHash }) : undefined,
       });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error?.message ?? "Workflow action failed");
       setInvoice(result.data.invoice);
+      setApprovalTerms(null);
       const actionLabel = action === "submit" ? "submitted" : action === "resubmit" ? "resubmitted" : action === "approve" ? "approved" : "rejected";
       setWorkflowMessage(result.data.idempotent ? "No duplicate action was recorded." : `Invoice ${actionLabel} successfully.`);
       setWorkflowState("idle");
@@ -105,7 +129,7 @@ export default function InvoiceDetailPage() {
     if (!invoice) return;
     setQuoteState("working"); setWorkflowMessage("");
     try {
-      const response = await fetch(`${apiBase}/api/invoices/${invoice.id}/quote`, { method: "POST", headers: { "x-demo-user-email": "reviewer@covendro.local", "idempotency-key": `ui-quote-${invoice.id}` } });
+      const response = await apiFetch(`${apiBase}/api/invoices/${invoice.id}/quote`, { method: "POST", headers: { "x-demo-user-email": "reviewer@covendro.local", "idempotency-key": `ui-quote-${invoice.id}` } });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error?.message ?? "Quote could not be created");
       window.location.href = `/payments/${result.data.payment.id}`;
@@ -115,7 +139,7 @@ export default function InvoiceDetailPage() {
 
   useEffect(() => {
     if (!params.id) return;
-    fetch(`${apiBase}/api/invoices/${params.id}`)
+    apiFetch(`${apiBase}/api/invoices/${params.id}`)
       .then(async (response) => {
         if (!response.ok) throw new Error("Invoice not found");
         return response.json();
@@ -133,10 +157,23 @@ export default function InvoiceDetailPage() {
         <div><p className="eyebrow">Invoice detail</p><h1>{invoice.invoiceNumber}</h1><p className="muted">Created {new Date(invoice.createdAt).toLocaleString()}</p></div>
         <span className="status-badge large-badge">{invoice.status}</span>
       </header>
-      <div className="page-nav"><a href="/invoices">← Invoices</a><button className="secondary-button" onClick={runAnalysis} disabled={analysisState === "working"}>{analysisState === "working" ? "Analyzing…" : invoice.extractedAt ? "Run analysis again" : "Analyze invoice"}</button></div>
+      <div className="page-nav"><a href="/invoices">← Invoices</a>{canSubmit && <button className="secondary-button" onClick={runAnalysis} disabled={analysisState === "working" || (pilotMode && invoice.status !== "DRAFT")}>{pilotMode ? "Confirm invoice fields" : analysisState === "working" ? "Analyzing…" : invoice.extractedAt ? "Run analysis again" : "Analyze invoice"}</button>}</div>
+      {pilotMode && canRestart && ["APPROVED", "REVIEW_REQUIRED"].includes(invoice.status) && <div className="action-row"><button className="secondary-button" onClick={() => void workflowAction("resubmit")}>Restart review for changed terms</button></div>}
       {analysisError && <div className="form-message error-state">{analysisError} <button className="secondary-button" onClick={runAnalysis}>Retry</button></div>}
       {workflowMessage && <div className={`form-message ${workflowState === "error" ? "error-state" : "success-state"}`}>{workflowMessage}</div>}
-      <section className="panel workflow-actions"><div><p className="eyebrow">Approval workflow</p><h2>Next action</h2><p className="muted">Demo actions use the seeded submitter and reviewer identities. Each transition is recorded in the audit history.</p></div><div className="action-row">{(invoice.status === "DRAFT" || invoice.status === "EXTRACTED") && <button onClick={() => void workflowAction("submit")} disabled={workflowState === "working"}>Submit for review</button>}{invoice.status === "REJECTED" && <button onClick={() => void workflowAction("resubmit")} disabled={workflowState === "working"}>Resubmit for review</button>}{invoice.status === "REVIEW_REQUIRED" && invoice.policyDecision !== "BLOCK" && invoice.vendorRiskDecision !== "BLOCK" && <><button onClick={() => void workflowAction("approve")} disabled={workflowState === "working"}>Approve as reviewer</button><input className="reject-input" value={rejectionReason} onChange={(event) => setRejectionReason(event.target.value)} placeholder="Reason if rejecting" /><button className="secondary-button" onClick={() => void workflowAction("reject")} disabled={workflowState === "working" || rejectionReason.trim().length < 3}>Reject</button></>}{invoice.status === "APPROVED" && <button onClick={() => void createQuote()} disabled={quoteState === "working"}>{quoteState === "working" ? "Requesting quote…" : "Generate payment quote"}</button>}{invoice.status === "QUOTE_READY" && invoice.payment && <a className="button-link" href={`/payments/${invoice.payment.id}`}>View payment quote</a>}{invoice.status === "BLOCKED" && <span className="status-badge danger-badge">Approval unavailable: blocked</span>}</div></section>
+      <section className="panel workflow-actions"><div><p className="eyebrow">Approval workflow</p><h2>Next action</h2><p className="muted">{pilotMode ? "Each decision is recorded in the audit history." : "Demo actions use the seeded submitter and reviewer identities. Each transition is recorded in the audit history."}</p></div><div className="action-row">{((!pilotMode && invoice.status === "DRAFT") || invoice.status === "EXTRACTED") && canSubmit && <button onClick={() => void workflowAction("submit")} disabled={workflowState === "working"}>Submit for review</button>}{invoice.status === "REJECTED" && canRestart && <button onClick={() => void workflowAction("resubmit")} disabled={workflowState === "working"}>Resubmit for review</button>}{invoice.status === "REVIEW_REQUIRED" && canReview && invoice.policyDecision !== "BLOCK" && invoice.vendorRiskDecision !== "BLOCK" && <><button onClick={() => void (pilotMode ? loadApprovalTerms() : workflowAction("approve"))} disabled={workflowState === "working"}>{pilotMode ? "Review payable terms" : "Approve as reviewer"}</button><input className="reject-input" value={rejectionReason} onChange={(event) => setRejectionReason(event.target.value)} placeholder="Reason if rejecting" /><button className="secondary-button" onClick={() => void workflowAction("reject")} disabled={workflowState === "working" || rejectionReason.trim().length < 3}>Reject</button></>}{invoice.status === "APPROVED" && canReview && <button onClick={() => void createQuote()} disabled={quoteState === "working"}>{quoteState === "working" ? "Requesting quote…" : "Generate payment quote"}</button>}{invoice.status === "QUOTE_READY" && invoice.payment && <a className="button-link" href={`/payments/${invoice.payment.id}`}>View payment quote</a>}{invoice.status === "BLOCKED" && <span className="status-badge danger-badge">Approval unavailable: blocked</span>}</div></section>
+      {approvalTerms && <section className="panel">
+        <h2>Confirm payable terms</h2>
+        <dl className="detail-list">
+          <dt>Invoice amount</dt><dd>{(invoice.amountMinor / 100).toFixed(2)} {invoice.currency}</dd>
+          <dt>Vendor destination</dt><dd>{approvalTerms.terms.destinationAddress}</dd>
+          <dt>Treasury account</dt><dd>{approvalTerms.terms.sourceAccountId}</dd>
+          <dt>Refund account</dt><dd>{approvalTerms.terms.refundAccountId}</dd>
+          <dt>Maximum treasury debit</dt><dd>{approvalTerms.terms.maxAuthorizedDebitMinor ? `${(approvalTerms.terms.maxAuthorizedDebitMinor / 100).toFixed(2)} USDC` : "Dry preview only"}</dd>
+        </dl>
+        <button disabled={workflowState === "working"} onClick={() => void workflowAction("approve")}>Approve these terms</button>
+      </section>}
+      {pilotMode && role === "TREASURY_SIGNER" && <LivePaymentPanel key={invoice.id} invoiceId={invoice.id} canPrepare={["APPROVED", "QUOTE_READY"].includes(invoice.status)} />}
       <section className="detail-grid">
         <article className="panel"><p className="eyebrow">Vendor</p><h2>{invoice.vendor.name}</h2><p className="muted">{invoice.vendor.accountAddress} · {invoice.vendor.accountChain ?? "chain not set"}</p><dl className="detail-list"><dt>Invoice date</dt><dd>{new Date(invoice.invoiceDate).toLocaleDateString()}</dd><dt>Due date</dt><dd>{invoice.dueDate ? new Date(invoice.dueDate).toLocaleDateString() : "Not set"}</dd><dt>Amount</dt><dd>{invoice.currency} {(invoice.amountMinor / 100).toLocaleString(undefined, { minimumFractionDigits: 2 })}</dd><dt>Destination</dt><dd>{invoice.paymentDestination} · {invoice.paymentChain ?? "chain not set"}</dd></dl></article>
         <article className="panel"><p className="eyebrow">Line items</p><div className="line-item-list">{invoice.lineItems.map((item) => <div className="line-item" key={item.id}><span>{item.description} × {item.quantity}</span><strong>{invoice.currency} {(item.totalAmountMinor / 100).toFixed(2)}</strong></div>)}</div>{invoice.memo && <p className="muted memo">{invoice.memo}</p>}</article>

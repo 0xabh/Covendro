@@ -1,3 +1,4 @@
+import type { Prisma } from "@prisma/client";
 import type { DecisionResult, VendorRiskResult } from "@covendro/shared";
 import { policyToSnapshot } from "@covendro/shared";
 import { prisma } from "../db/prisma.js";
@@ -18,20 +19,20 @@ function startOfUtcDay() {
   return date;
 }
 
-export async function assessInvoiceControls(invoiceId: string, organizationId: string): Promise<InvoiceControls> {
-  const invoice = await prisma.invoice.findFirst({
+export async function assessInvoiceControls(invoiceId: string, organizationId: string, db: Prisma.TransactionClient = prisma): Promise<InvoiceControls> {
+  const invoice = await db.invoice.findFirst({
     where: { id: invoiceId, organizationId },
     include: { vendor: true },
   });
   if (!invoice) throw new ApiError(404, "INVOICE_NOT_FOUND", "Invoice was not found");
 
   const [policyRecord, previousInvoices, previousPaymentCount, dailyInvoices, duplicateInvoice, duplicateDocument] = await Promise.all([
-    prisma.treasuryPolicy.findFirst({ where: { organizationId, active: true }, orderBy: { version: "desc" } }),
-    prisma.invoice.findMany({ where: { organizationId, vendorId: invoice.vendorId, id: { not: invoice.id } }, select: { paymentDestination: true } }),
-    prisma.invoice.count({ where: { organizationId, vendorId: invoice.vendorId, payment: { isNot: null } } }),
-    prisma.invoice.findMany({ where: { organizationId, createdAt: { gte: startOfUtcDay() }, id: { not: invoice.id }, status: { notIn: ["REJECTED", "BLOCKED"] } }, select: { amountMinor: true } }),
-    prisma.invoice.findFirst({ where: { organizationId, vendorId: invoice.vendorId, invoiceNumber: invoice.invoiceNumber, id: { not: invoice.id } }, select: { id: true } }),
-    invoice.fileHash ? prisma.invoice.findFirst({ where: { organizationId, fileHash: invoice.fileHash, id: { not: invoice.id } }, select: { id: true } }) : null,
+    db.treasuryPolicy.findFirst({ where: { organizationId, active: true }, orderBy: { version: "desc" } }),
+    db.invoice.findMany({ where: { organizationId, vendorId: invoice.vendorId, id: { not: invoice.id } }, select: { paymentDestination: true } }),
+    db.invoice.count({ where: { organizationId, vendorId: invoice.vendorId, payment: { isNot: null } } }),
+    db.invoice.findMany({ where: { organizationId, createdAt: { gte: startOfUtcDay() }, id: { not: invoice.id }, status: { notIn: ["REJECTED", "BLOCKED"] } }, select: { amountMinor: true } }),
+    db.invoice.findFirst({ where: { organizationId, vendorId: invoice.vendorId, invoiceNumber: invoice.invoiceNumber, id: { not: invoice.id } }, select: { id: true } }),
+    invoice.fileHash ? db.invoice.findFirst({ where: { organizationId, fileHash: invoice.fileHash, id: { not: invoice.id } }, select: { id: true } }) : null,
   ]);
   if (!policyRecord) throw new ApiError(500, "TREASURY_POLICY_MISSING", "No active treasury policy is configured");
 
@@ -61,10 +62,11 @@ export async function assessInvoiceControls(invoiceId: string, organizationId: s
   return { vendorRisk, policy, policySnapshot, dailyTotalMinor };
 }
 
-export async function persistInvoiceControls(invoiceId: string, organizationId: string, actorId: string, requestId: string, controls: InvoiceControls) {
+export async function persistInvoiceControls(invoiceId: string, organizationId: string, actorId: string, requestId: string, controls: InvoiceControls, humanVerified = false) {
   const updated = await prisma.invoice.update({
-    where: { id: invoiceId },
+    where: { id: invoiceId, organizationId, ...(humanVerified ? { status: "DRAFT" } : {}) },
     data: {
+      ...(humanVerified ? { status: "EXTRACTED", extractedAt: new Date(), verificationState: "HUMAN_VERIFIED", verificationExplanation: "A workspace member confirmed the invoice fields." } : {}),
       vendorRiskDecision: controls.vendorRisk.decision,
       vendorRiskReasonsJson: JSON.stringify(controls.vendorRisk),
       policyDecision: controls.policy.decision,
@@ -74,6 +76,7 @@ export async function persistInvoiceControls(invoiceId: string, organizationId: 
       vendor: { update: { riskStatus: controls.vendorRisk.decision } },
       auditEvents: {
         create: [
+          ...(humanVerified ? [{ organizationId, actorId, eventType: "INVOICE_FIELDS_CONFIRMED", description: "Invoice fields confirmed by a workspace member", requestId }] : []),
           { organizationId, actorId, eventType: "VENDOR_RISK_ASSESSED", description: `Vendor risk assessed as ${controls.vendorRisk.decision}`, metadataJson: JSON.stringify({ decision: controls.vendorRisk.decision, riskScore: controls.vendorRisk.riskScore, reasons: controls.vendorRisk.reasons }), requestId },
           { organizationId, actorId, eventType: "POLICY_EVALUATED", description: `Treasury policy evaluated as ${controls.policy.decision}`, metadataJson: JSON.stringify({ decision: controls.policy.decision, policyVersion: controls.policy.policyVersion, reasons: controls.policy.reasons }), requestId },
         ],

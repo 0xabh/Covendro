@@ -17,6 +17,8 @@
     "db:generate": "prisma generate",
     "db:migrate": "tsx scripts/apply-sqlite-migration.ts",
     "db:migrate:prisma": "prisma migrate deploy",
+    "db:generate:postgresql": "node scripts/prepare-postgresql-schema.mjs && prisma generate --schema prisma/postgresql/schema.prisma",
+    "db:migrate:postgresql": "node scripts/prepare-postgresql-schema.mjs && prisma migrate deploy --schema prisma/postgresql/schema.prisma",
     "db:seed": "tsx prisma/seed.ts",
     "db:setup": "npm run db:generate && npm run db:migrate && npm run db:seed",
     "e2e": "npm run build && playwright test",

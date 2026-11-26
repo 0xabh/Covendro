@@ -2,7 +2,8 @@
 
 import { FormEvent, useEffect, useState } from "react";
 
-const apiBase = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
+import { useWorkspaceRole } from "../../components/app-shell";
+import { apiBase, apiFetch, pilotMode } from "../../lib/api";
 
 type Policy = {
   id: string;
@@ -25,13 +26,15 @@ function dollars(minor: number) { return (minor / 100).toFixed(2); }
 function minor(value: string) { return Math.round(Number(value) * 100); }
 
 export default function TreasuryPolicyPage() {
+  const role = useWorkspaceRole();
+  const canEdit = !pilotMode || role === "TREASURY_ADMINISTRATOR";
   const [policy, setPolicy] = useState<Policy | null>(null);
   const [state, setState] = useState<"loading" | "ready" | "error">("loading");
   const [message, setMessage] = useState("");
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    fetch(`${apiBase}/api/policies`, { headers: { "x-demo-user-email": "treasury@covendro.local" } })
+    apiFetch(`${apiBase}/api/policies`, { headers: { "x-demo-user-email": "treasury@covendro.local" } })
       .then(async (response) => { if (!response.ok) throw new Error("Policy could not be loaded"); return response.json(); })
       .then((result) => { setPolicy(result.data.active ? { ...result.data.active, treasuryIdentity: result.data.treasuryIdentity } : null); setState("ready"); })
       .catch(() => setState("error"));
@@ -46,7 +49,7 @@ export default function TreasuryPolicyPage() {
     if (!policy) return;
     setSaving(true); setMessage("");
     try {
-      const response = await fetch(`${apiBase}/api/policies/${policy.id}`, {
+      const response = await apiFetch(`${apiBase}/api/policies/${policy.id}`, {
         method: "PUT",
         headers: { "content-type": "application/json", "x-demo-user-email": "treasury@covendro.local" },
         body: JSON.stringify({
@@ -73,7 +76,7 @@ export default function TreasuryPolicyPage() {
   async function toggleFreeze() {
     if (!policy) return;
     const action = policy.freezePayments ? "unfreeze" : "freeze";
-    const response = await fetch(`${apiBase}/api/policies/${policy.id}/${action}`, { method: "POST", headers: { "x-demo-user-email": "treasury@covendro.local" } });
+    const response = await apiFetch(`${apiBase}/api/policies/${policy.id}/${action}`, { method: "POST", headers: { "x-demo-user-email": "treasury@covendro.local" } });
     const result = await response.json();
     if (!response.ok) { setMessage(result.error?.message ?? "Freeze state could not be changed"); return; }
     setPolicy((current) => current ? { ...result.data, treasuryIdentity: current.treasuryIdentity } : result.data); setMessage(result.data.freezePayments ? "Treasury frozen." : "Treasury unfrozen.");
@@ -84,10 +87,11 @@ export default function TreasuryPolicyPage() {
 
   return <main className="page-shell narrow-page">
     <header className="page-header"><div><p className="eyebrow">Treasury controls</p><h1>Policy</h1><p className="muted">Version {policy.version}. Changes create a new immutable policy version and an audit event.</p></div><span className={`status-badge ${policy.freezePayments ? "danger-badge" : ""}`}>{policy.freezePayments ? "FROZEN" : "ACTIVE"}</span></header>
-    <div className="page-nav"><a href="/">← Dashboard</a><span>Demo administrator · policy changes are local</span></div>
+    <div className="page-nav"><a href="/">← Dashboard</a>{!pilotMode && <span>Demo administrator · policy changes are local</span>}</div>
     {message && <div className="form-message success-state">{message}</div>}
-    {policy.treasuryIdentity && <section className="panel identity-panel"><p className="eyebrow">NEAR treasury identity</p><h2>{policy.treasuryIdentity.name}</h2><dl className="detail-list compact-list"><dt>Account</dt><dd>{policy.treasuryIdentity.nearAccountId}</dd><dt>Key type</dt><dd>{policy.treasuryIdentity.keyType}</dd><dt>Purpose</dt><dd>{policy.treasuryIdentity.keyPurpose}</dd><dt>Scope</dt><dd>{policy.treasuryIdentity.accessKeyPermissionScope}</dd></dl><p className="muted">Demo metadata only. No private key or transfer authority is stored.</p></section>}
+    {policy.treasuryIdentity && <section className="panel identity-panel"><p className="eyebrow">NEAR treasury identity</p><h2>{policy.treasuryIdentity.name}</h2><dl className="detail-list compact-list"><dt>Account</dt><dd>{policy.treasuryIdentity.nearAccountId}</dd><dt>Key type</dt><dd>{policy.treasuryIdentity.keyType}</dd><dt>Purpose</dt><dd>{policy.treasuryIdentity.keyPurpose}</dd><dt>Scope</dt><dd>{policy.treasuryIdentity.accessKeyPermissionScope}</dd></dl><p className="muted">{pilotMode ? "Ownership is verified through the treasury wallet during payment preparation." : "Demo metadata only. No private key or transfer authority is stored."}</p></section>}
     <form className="panel invoice-form" onSubmit={save}>
+      <fieldset disabled={!canEdit} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
       <div className="form-section"><p className="eyebrow">Limits</p><div className="form-grid">
         <label>Maximum per transaction (USDC)<input required type="number" min="0" step="0.01" value={dollars(policy.maxPaymentPerTransactionMinor)} onChange={(event) => update("maxPaymentPerTransactionMinor", minor(event.target.value))} /></label>
         <label>Maximum daily total (USDC)<input required type="number" min="0" step="0.01" value={dollars(policy.maxDailyPaymentTotalMinor)} onChange={(event) => update("maxDailyPaymentTotalMinor", minor(event.target.value))} /></label>
@@ -101,10 +105,11 @@ export default function TreasuryPolicyPage() {
       <div className="form-section checkbox-grid">
         <label><input type="checkbox" checked={policy.blockUnknownRecipients} onChange={(event) => update("blockUnknownRecipients", event.target.checked)} /> Block unknown recipients</label>
         <label><input type="checkbox" checked={policy.warningsRequireManualReview} onChange={(event) => update("warningsRequireManualReview", event.target.checked)} /> Warnings require manual review</label>
-        <label><input type="checkbox" checked={policy.allowSelfApproval} onChange={(event) => update("allowSelfApproval", event.target.checked)} /> Allow request creator to approve (demo only)</label>
-        <label><input type="checkbox" checked={policy.demoMode} onChange={(event) => update("demoMode", event.target.checked)} /> Demo mode</label>
+        {!pilotMode && <><label><input type="checkbox" checked={policy.allowSelfApproval} onChange={(event) => update("allowSelfApproval", event.target.checked)} /> Allow request creator to approve (demo only)</label>
+        <label><input type="checkbox" checked={policy.demoMode} onChange={(event) => update("demoMode", event.target.checked)} /> Demo mode</label></>}
       </div>
       <div className="form-actions"><button type="button" className="secondary-button" onClick={() => void toggleFreeze()}>{policy.freezePayments ? "Unfreeze treasury" : "Freeze treasury"}</button><button type="submit" disabled={saving}>{saving ? "Saving…" : "Save new policy version"}</button></div>
+      </fieldset>
     </form>
   </main>;
 }

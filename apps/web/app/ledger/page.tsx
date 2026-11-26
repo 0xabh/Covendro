@@ -2,13 +2,13 @@
 
 import { useCallback, useEffect, useState } from "react";
 
-const apiBase = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
+import { apiBase, apiFetch } from "../../lib/api";
 type Ledger = { invoiceId: string; invoiceNumber: string; vendor: string; grossAmountMinor: number; currency: string; paymentStatus: string; paymentRail?: string | null; quoteMode?: string | null; quoteId?: string | null; transactionHash?: string | null; refundStatus?: string | null; createdAt: string; approvedAt?: string | null; paidAt?: string | null };
 
 export default function LedgerPage() {
   const [entries, setEntries] = useState<Ledger[]>([]);
   const [state, setState] = useState<"loading" | "ready" | "error">("loading");
-  const load = useCallback(() => { setState("loading"); fetch(`${apiBase}/api/ledger`).then(async (response) => { if (!response.ok) throw new Error(); return response.json(); }).then((result) => { setEntries(result.data); setState("ready"); }).catch(() => setState("error")); }, []);
+  const load = useCallback(() => { setState("loading"); apiFetch(`${apiBase}/api/ledger`).then(async (response) => { if (!response.ok) throw new Error(); return response.json(); }).then((result) => { setEntries(result.data); setState("ready"); }).catch(() => setState("error")); }, []);
   useEffect(() => { void load(); }, [load]);
 
   return <main className="page-shell"><header className="page-header"><div><p className="eyebrow">Bookkeeping</p><h1>Ledger</h1><p className="muted">A payment projection with quote, approval, settlement, and refund references.</p></div><a className="button-link" href={`${apiBase}/api/ledger.csv`}>Export CSV</a></header><div className="page-nav"><a href="/">← Dashboard</a><span>CSV is generated from the local ledger projection</span></div>

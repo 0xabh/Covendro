@@ -2,7 +2,8 @@
 
 import { useCallback, useEffect, useState } from "react";
 
-const apiBase = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
+import { useWorkspaceRole } from "../../components/app-shell";
+import { apiBase, apiFetch, pilotMode } from "../../lib/api";
 
 type Invoice = {
   id: string;
@@ -20,13 +21,15 @@ function formatAmount(invoice: Invoice) {
 }
 
 export default function InvoicesPage() {
+  const role = useWorkspaceRole();
+  const canSubmit = !pilotMode || role === "SUBMITTER";
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [state, setState] = useState<"loading" | "ready" | "error">("loading");
 
   const loadInvoices = useCallback(async () => {
     setState("loading");
     try {
-      const response = await fetch(`${apiBase}/api/invoices`);
+      const response = await apiFetch(`${apiBase}/api/invoices`);
       if (!response.ok) throw new Error("Unable to load invoices");
       const result = await response.json();
       setInvoices(result.data);
@@ -48,10 +51,10 @@ export default function InvoicesPage() {
           <h1>Invoices</h1>
           <p className="muted">Review incoming payment requests before they enter the treasury workflow.</p>
         </div>
-        <a className="button-link" href="/invoices/new">New invoice</a>
+        {canSubmit && <a className="button-link" href="/invoices/new">New invoice</a>}
       </header>
 
-      <div className="page-nav"><a href="/">← Dashboard</a><span>Demo user: submitter@covendro.local</span></div>
+      <div className="page-nav"><a href="/">← Dashboard</a>{!pilotMode && <span>Demo user: submitter@covendro.local</span>}</div>
 
       {state === "loading" && <section className="panel-state">Loading invoices…</section>}
       {state === "error" && (
@@ -65,8 +68,7 @@ export default function InvoicesPage() {
         <section className="panel-state">
           <div className="empty-icon">◎</div>
           <h2>No invoices yet</h2>
-          <p className="muted">Start with a fictional JSON fixture or enter an invoice manually.</p>
-          <a className="button-link" href="/invoices/new">Create the first invoice</a>
+          {canSubmit && <a className="button-link" href="/invoices/new">Create the first invoice</a>}
         </section>
       )}
       {state === "ready" && invoices.length > 0 && (
