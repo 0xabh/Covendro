@@ -15,11 +15,19 @@ function csv(rows: Array<Record<string, unknown>>, columns: string[]) {
 }
 
 async function ledgerRows(organizationId: string) {
-  return prisma.ledgerEntry.findMany({ where: { invoice: { organizationId } }, include: { invoice: { include: { vendor: true } }, payment: true }, orderBy: { createdAt: "desc" } });
+  return prisma.ledgerEntry.findMany({ where: { invoice: { organizationId } }, include: { invoice: { include: { vendor: true, livePaymentAttempts: { where: { handedOffAt: { not: null } }, orderBy: { handedOffAt: "desc" }, take: 1 } } }, payment: true }, orderBy: { createdAt: "desc" } });
 }
 
 function ledgerResponse(entry: Awaited<ReturnType<typeof ledgerRows>>[number]) {
+  const live = entry.invoice.livePaymentAttempts[0];
   return {
+    destinationTxHash: live?.destinationTxHash,
+    refundTxHash: live?.refundTxHash,
+    originDebitAtomic: live?.fundingTxHash ? live.originDebitAtomic : undefined,
+    reservedDebitAtomic: live && !live.fundingTxHash ? live.reservedDebitAtomic : undefined,
+    deliveredAtomic: live?.destinationTxHash ? live.destinationAmountAtomic : undefined,
+    refundedAtomic: live?.refundedAtomic,
+    reconcileIssue: live?.reconcileIssue,
     id: entry.id,
     invoiceId: entry.invoiceId,
     invoiceNumber: entry.invoice.invoiceNumber,
@@ -39,7 +47,7 @@ function ledgerResponse(entry: Awaited<ReturnType<typeof ledgerRows>>[number]) {
   };
 }
 
-const ledgerColumns = ["invoiceId", "invoiceNumber", "vendor", "grossAmount", "currency", "paymentStatus", "paymentRail", "quoteMode", "quoteId", "transactionHash", "refundStatus", "createdAt", "approvedAt", "paidAt"];
+const ledgerColumns = ["invoiceId", "invoiceNumber", "vendor", "grossAmount", "currency", "paymentStatus", "paymentRail", "quoteMode", "quoteId", "transactionHash", "refundStatus", "createdAt", "approvedAt", "paidAt", "destinationTxHash", "refundTxHash", "originDebitAtomic", "reservedDebitAtomic", "deliveredAtomic", "refundedAtomic", "reconcileIssue"];
 
 export function registerReportingRoutes(app: FastifyInstance) {
   app.get("/api/ledger", async (request) => {
@@ -51,7 +59,7 @@ export function registerReportingRoutes(app: FastifyInstance) {
     const user = await requireWorkspaceUser(request, "submitter@covendro.local");
     const rows = (await ledgerRows(user.organizationId)).map((entry) => {
       const item = ledgerResponse(entry);
-      return { invoiceId: item.invoiceId, invoiceNumber: item.invoiceNumber, vendor: item.vendor, grossAmount: `${item.currency} ${(item.grossAmountMinor / 100).toFixed(2)}`, currency: item.currency, paymentStatus: item.paymentStatus, paymentRail: item.paymentRail, quoteMode: item.quoteMode, quoteId: item.quoteId, transactionHash: item.transactionHash, refundStatus: item.refundStatus, createdAt: item.createdAt.toISOString(), approvedAt: item.approvedAt?.toISOString() ?? "", paidAt: item.paidAt?.toISOString() ?? "" };
+      return { ...item, grossAmount: `${item.currency} ${(item.grossAmountMinor / 100).toFixed(2)}`, currency: item.currency, paymentStatus: item.paymentStatus, paymentRail: item.paymentRail, quoteMode: item.quoteMode, quoteId: item.quoteId, transactionHash: item.transactionHash, refundStatus: item.refundStatus, createdAt: item.createdAt.toISOString(), approvedAt: item.approvedAt?.toISOString() ?? "", paidAt: item.paidAt?.toISOString() ?? "" };
     });
     return reply.type("text/csv; charset=utf-8").header("content-disposition", "attachment; filename=covendro-ledger.csv").send(csv(rows, ledgerColumns));
   });

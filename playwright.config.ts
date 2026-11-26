@@ -1,3 +1,5 @@
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { defineConfig, devices } from "@playwright/test";
 
 const pilot = process.env.COVENDRO_PILOT_BROWSER_TEST === "true";
@@ -16,18 +18,21 @@ export default defineConfig({
     trace: "retain-on-failure",
   },
   webServer: pilot ? {
+    env: { COVENDRO_BROWSER_BUILD: "true" },
     command: 'NEXT_PUBLIC_COVENDRO_PILOT=true NEXT_PUBLIC_API_URL="" npm --workspace @covendro/web run dev -- --hostname 127.0.0.1 --port 3102',
     url: "http://127.0.0.1:3102",
     reuseExistingServer: false,
     timeout: 120_000,
   } : [
     {
-      command: "npm run e2e:prepare && NODE_ENV=development DATABASE_URL=file:/private/tmp/covendro-playwright.db API_PORT=4101 COVENDRO_FORCE_MOCKS=true node apps/api/dist/server.js",
+      env: { DEMO_MODE: "true", DATABASE_URL: `file:${join(tmpdir(), "covendro-playwright.db")}` },
+      command: "npm run e2e:prepare && NODE_ENV=development API_PORT=4101 COVENDRO_FORCE_MOCKS=true node apps/api/dist/server.js",
       url: "http://127.0.0.1:4101/health",
       reuseExistingServer: false,
       timeout: 120_000,
     },
     {
+      env: { COVENDRO_BROWSER_BUILD: "true", NEXT_PUBLIC_COVENDRO_PILOT: "false" },
       command: "NEXT_PUBLIC_API_URL=http://127.0.0.1:4101 npm --workspace @covendro/web run dev -- --port 3101",
       url: "http://127.0.0.1:3101",
       reuseExistingServer: false,

@@ -1,0 +1,1 @@
+ALTER TABLE "TreasuryPolicy" ADD COLUMN "reviewerQuorum" INTEGER NOT NULL DEFAULT 1;

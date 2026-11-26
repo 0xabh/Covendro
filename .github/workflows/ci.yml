@@ -11,7 +11,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
           cache: npm
       - run: npm ci
       - run: npm run db:setup
@@ -20,3 +20,42 @@ jobs:
       - run: npm run lint
       - run: npm test
       - run: npm run build
+      - run: npx playwright install --with-deps chromium
+      - run: npx playwright test --workers=1
+      - run: COVENDRO_PILOT_BROWSER_TEST=true npx playwright test --workers=1
+
+  pilot-database:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: covendro
+          POSTGRES_PASSWORD: local-fixture
+          POSTGRES_DB: covendro
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U covendro"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      DATABASE_URL: postgresql://covendro:local-fixture@localhost:5432/covendro
+      DEMO_MODE: "false"
+      PGPASSWORD: local-fixture
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run db:generate:postgresql
+      - run: npm run db:migrate:postgresql
+      - run: npm run build:api
+      - run: node --import tsx scripts/manage-workspace-access.mts bootstrap ci-pilot "CI Pilot"
+      - name: Rehearse PostgreSQL restore
+        run: |
+          docker exec -i "${{ job.services.postgres.id }}" pg_dump -U covendro covendro > /tmp/covendro-ci.sql
+          docker exec -i "${{ job.services.postgres.id }}" createdb -U covendro covendro_restored
+          docker exec -i "${{ job.services.postgres.id }}" psql -v ON_ERROR_STOP=1 -U covendro covendro_restored < /tmp/covendro-ci.sql
+          docker exec -i "${{ job.services.postgres.id }}" psql -U covendro covendro_restored -tAc 'SELECT slug FROM "Organization"' | grep -Fx ci-pilot

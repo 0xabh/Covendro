@@ -1,0 +1,17 @@
+BEGIN;
+ALTER TABLE "LivePaymentAttempt" ADD COLUMN "providerStatus" TEXT;
+ALTER TABLE "LivePaymentAttempt" ADD COLUMN "nextCheckAt" DATETIME;
+ALTER TABLE "LivePaymentAttempt" ADD COLUMN "leaseUntil" DATETIME;
+ALTER TABLE "LivePaymentAttempt" ADD COLUMN "leaseToken" TEXT;
+ALTER TABLE "LivePaymentAttempt" ADD COLUMN "checkFailures" INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE "LivePaymentAttempt" ADD COLUMN "reconcileIssue" TEXT;
+ALTER TABLE "LivePaymentAttempt" ADD COLUMN "fundedAt" DATETIME;
+ALTER TABLE "LivePaymentAttempt" ADD COLUMN "destinationTxHash" TEXT;
+ALTER TABLE "LivePaymentAttempt" ADD COLUMN "refundTxHash" TEXT;
+ALTER TABLE "LivePaymentAttempt" ADD COLUMN "refundedAtomic" TEXT;
+ALTER TABLE "LivePaymentAttempt" ADD COLUMN "settledAt" DATETIME;
+UPDATE "LivePaymentAttempt" SET "nextCheckAt" = CURRENT_TIMESTAMP WHERE "activeInvoiceId" IS NOT NULL AND "handedOffAt" IS NOT NULL;
+CREATE UNIQUE INDEX "LivePaymentAttempt_destinationTxHash_key" ON "LivePaymentAttempt"("destinationTxHash");
+CREATE UNIQUE INDEX "LivePaymentAttempt_refundTxHash_key" ON "LivePaymentAttempt"("refundTxHash");
+CREATE INDEX "LivePaymentAttempt_nextCheckAt_leaseUntil_idx" ON "LivePaymentAttempt"("nextCheckAt","leaseUntil");
+COMMIT;

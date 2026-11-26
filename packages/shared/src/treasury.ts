@@ -11,6 +11,7 @@ export type TreasuryPolicySnapshot = {
   allowedCurrencies: string[];
   allowedChains: string[];
   allowedRecipients: string[];
+  reviewerQuorum?: number;
   requireApprovalAboveMinor: number;
   blockUnknownRecipients: boolean;
   warningsRequireManualReview: boolean;
@@ -56,6 +57,7 @@ export const treasuryPolicyUpdateSchema = z.object({
   allowedCurrencies: z.array(z.string().trim().min(1)).min(1),
   allowedChains: z.array(z.string().trim().min(1)).min(1),
   allowedRecipients: z.array(z.string().trim().min(1)),
+  reviewerQuorum: z.number().int().min(1).max(10).optional(),
   requireApprovalAboveMinor: z.number().int().nonnegative(),
   blockUnknownRecipients: z.boolean(),
   warningsRequireManualReview: z.boolean(),
@@ -78,6 +80,7 @@ export function policyToSnapshot(policy: {
   allowedCurrenciesCsv: string;
   allowedChainsCsv: string;
   allowedRecipientsCsv: string;
+  reviewerQuorum?: number;
   requireApprovalAboveMinor: number;
   blockUnknownRecipients: boolean;
   warningsRequireManualReview: boolean;
@@ -93,6 +96,7 @@ export function policyToSnapshot(policy: {
     allowedCurrencies: csvToList(policy.allowedCurrenciesCsv),
     allowedChains: csvToList(policy.allowedChainsCsv),
     allowedRecipients: csvToList(policy.allowedRecipientsCsv),
+    reviewerQuorum: policy.reviewerQuorum ?? 1,
     requireApprovalAboveMinor: policy.requireApprovalAboveMinor,
     blockUnknownRecipients: policy.blockUnknownRecipients,
     warningsRequireManualReview: policy.warningsRequireManualReview,

@@ -142,6 +142,7 @@ model TreasuryPolicy {
   allowedCurrenciesCsv          String
   allowedChainsCsv              String
   allowedRecipientsCsv          String
+  reviewerQuorum                Int          @default(1)
   requireApprovalAboveMinor     Int
   blockUnknownRecipients        Boolean      @default(true)
   warningsRequireManualReview   Boolean      @default(true)
@@ -299,9 +300,21 @@ model LivePaymentAttempt {
   reservedDebitAtomic String?
   handedOffAt DateTime?
   fundingTxHash String? @unique
+  providerStatus String?
+  nextCheckAt DateTime?
+  leaseUntil DateTime?
+  leaseToken String?
+  checkFailures Int @default(0)
+  reconcileIssue String?
+  fundedAt DateTime?
+  destinationTxHash String? @unique
+  refundTxHash String? @unique
+  refundedAtomic String?
+  settledAt DateTime?
   createdAt DateTime @default(now())
   invoice Invoice @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
 
+  @@index([nextCheckAt, leaseUntil])
   @@index([organizationId, sourceAsset, reservationDay])
   @@index([invoiceId, createdAt])
 }

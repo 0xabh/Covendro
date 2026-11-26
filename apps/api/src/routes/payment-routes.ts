@@ -22,6 +22,20 @@ export function registerPaymentRoutes(app: FastifyInstance) {
     return { data: await listPayments(user.organizationId) };
   });
 
+  app.get("/api/payments/reconciliation", async (request) => {
+    const user = await requireWorkspaceUser(request);
+    if (process.env.DEMO_MODE !== "false" || !["TREASURY_ADMINISTRATOR", "TREASURY_SIGNER", "AUDITOR"].includes(user.role)) {
+      throw new ApiError(403, "RECONCILIATION_ACCESS_REQUIRED", "Treasury or auditor access is required");
+    }
+    const attempts = await prisma.livePaymentAttempt.findMany({
+      where: { organizationId: user.organizationId, activeInvoiceId: { not: null }, handedOffAt: { not: null } },
+      orderBy: { handedOffAt: "asc" }, take: 100,
+      include: { invoice: { select: { invoiceNumber: true, payment: { select: { id: true } } } } },
+    });
+    return { data: attempts.map((attempt) => ({ ...summarizeAttempt(attempt), invoiceNumber: attempt.invoice.invoiceNumber,
+      paymentId: attempt.invoice.payment?.id, nextCheckAt: attempt.nextCheckAt, failures: attempt.checkFailures })) };
+  });
+
   app.get("/api/payments/supported-assets", async () => ({ data: await getPaymentRail().getSupportedAssets() }));
 
   app.get<{ Params: { id: string } }>("/api/payments/:id", async (request) => {
@@ -38,7 +52,7 @@ export function registerPaymentRoutes(app: FastifyInstance) {
     const user = await requireWorkspaceUser(request);
     requireLiveSigner(user);
     const attempt = await prisma.livePaymentAttempt.findFirst({
-      where: { activeInvoiceId: request.params.id, organizationId: user.organizationId },
+      where: { invoiceId: request.params.id, organizationId: user.organizationId }, orderBy: { createdAt: "desc" },
     });
     return { data: attempt ? summarizeAttempt(attempt) : null, walletHandoffEnabled: process.env.PILOT_ENABLE_WALLET_HANDOFF === "true" };
   });

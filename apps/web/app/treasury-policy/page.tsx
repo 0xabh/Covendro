@@ -13,6 +13,7 @@ type Policy = {
   allowedCurrencies: string[];
   allowedChains: string[];
   allowedRecipients: string[];
+  reviewerQuorum?: number;
   requireApprovalAboveMinor: number;
   blockUnknownRecipients: boolean;
   warningsRequireManualReview: boolean;
@@ -58,6 +59,7 @@ export default function TreasuryPolicyPage() {
           allowedCurrencies: policy.allowedCurrencies,
           allowedChains: policy.allowedChains,
           allowedRecipients: policy.allowedRecipients,
+          reviewerQuorum: policy.reviewerQuorum ?? 1,
           requireApprovalAboveMinor: policy.requireApprovalAboveMinor,
           blockUnknownRecipients: policy.blockUnknownRecipients,
           warningsRequireManualReview: policy.warningsRequireManualReview,
@@ -95,6 +97,7 @@ export default function TreasuryPolicyPage() {
       <div className="form-section"><p className="eyebrow">Limits</p><div className="form-grid">
         <label>Maximum per transaction (USDC)<input required type="number" min="0" step="0.01" value={dollars(policy.maxPaymentPerTransactionMinor)} onChange={(event) => update("maxPaymentPerTransactionMinor", minor(event.target.value))} /></label>
         <label>Maximum daily total (USDC)<input required type="number" min="0" step="0.01" value={dollars(policy.maxDailyPaymentTotalMinor)} onChange={(event) => update("maxDailyPaymentTotalMinor", minor(event.target.value))} /></label>
+        <label>Distinct reviewers required<input required type="number" min="1" max="10" step="1" value={policy.reviewerQuorum ?? 1} onChange={(event) => update("reviewerQuorum", Number(event.target.value))} /></label>
         <label>Approval threshold (USDC)<input required type="number" min="0" step="0.01" value={dollars(policy.requireApprovalAboveMinor)} onChange={(event) => update("requireApprovalAboveMinor", minor(event.target.value))} /></label>
       </div></div>
       <div className="form-section"><p className="eyebrow">Allowlist</p><div className="form-grid">

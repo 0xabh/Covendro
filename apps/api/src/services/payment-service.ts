@@ -4,6 +4,7 @@ import { prisma } from "../db/prisma.js";
 import { ApiError } from "../errors.js";
 import { getPaymentRail } from "./payments/payment-rail-factory.js";
 import { MockPaymentRail } from "./payments/mock-payment-rail.js";
+import { summarizeAttempt } from "./payments/live-payment-service.js";
 import { currentPayableTerms } from "./payable-terms.js";
 import { assessInvoiceControls } from "./risk-assessment-service.js";
 import { syncLedgerEntry } from "./ledger-service.js";
@@ -17,7 +18,10 @@ function requirePaymentOperator(actor: Actor) {
 export async function findPayment(paymentId: string, organizationId: string) {
   const payment = await prisma.payment.findFirst({ where: { id: paymentId, organizationId }, include: { invoice: { include: { vendor: true, approvals: { include: { reviewer: true } }, auditEvents: { orderBy: { createdAt: "desc" } } } }, ledgerEntry: true } });
   if (!payment) throw new ApiError(404, "PAYMENT_NOT_FOUND", "Payment was not found");
-  return payment;
+  const live = payment.quoteMode === "LIVE_HANDOFF" ? await prisma.livePaymentAttempt.findFirst({
+    where: { invoiceId: payment.invoiceId, organizationId, handedOffAt: { not: null } }, orderBy: { handedOffAt: "desc" },
+  }) : null;
+  return { ...payment, liveEvidence: live ? summarizeAttempt(live) : null };
 }
 
 export async function listPayments(organizationId: string) {

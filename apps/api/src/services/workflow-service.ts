@@ -1,6 +1,7 @@
 import type { InvoiceStatus } from "@covendro/shared";
 import { canTransitionInvoice } from "@covendro/shared";
 import { prisma } from "../db/prisma.js";
+import { lockTreasuryWorkspace } from "./treasury-lock.js";
 import { currentPayableTerms, hashPayableTerms } from "./payable-terms.js";
 import { ApiError } from "../errors.js";
 
@@ -62,15 +63,17 @@ export async function submitInvoice(invoiceId: string, actor: Actor, requestId: 
 export async function resubmitInvoice(invoiceId: string, actor: Actor, requestId: string) {
   const invoice = await findInvoice(invoiceId, actor.organizationId);
   if (invoice.createdById !== actor.id && actor.role !== "TREASURY_ADMINISTRATOR") throw new ApiError(403, "SUBMITTER_ONLY_OWN_REQUEST", "Only the request creator or treasury administrator can resubmit this request");
-  if (process.env.DEMO_MODE === "false" && ["APPROVED", "REVIEW_REQUIRED"].includes(invoice.status)) {
+  if (process.env.DEMO_MODE === "false" && ["APPROVED", "REVIEW_REQUIRED", "QUOTE_READY"].includes(invoice.status)) {
     await prisma.$transaction(async (tx) => {
+      await lockTreasuryWorkspace(tx, actor.organizationId);
       const locked = await tx.invoice.updateMany({
         where: { id: invoice.id, status: invoice.status, approvalRound: invoice.approvalRound },
         data: { status: invoice.status },
       });
       if (!locked.count) throw new ApiError(409, "INVALID_APPROVAL_STATE", "The payable changed while restarting review");
       const payment = await tx.payment.findUnique({ where: { invoiceId: invoice.id } });
-      if (payment && !["FAILED", "EXPIRED"].includes(payment.status)) {
+      const dryPreview = payment?.status === "QUOTE_READY" && payment.quoteMode === "REAL_DRY";
+      if (payment && !dryPreview && !["FAILED", "EXPIRED"].includes(payment.status)) {
         throw new ApiError(409, "PAYMENT_ALREADY_STARTED", "The existing payment attempt must be resolved first");
       }
       const current = await tx.invoice.findUniqueOrThrow({ where: { id: invoice.id } });
@@ -82,6 +85,14 @@ export async function resubmitInvoice(invoiceId: string, actor: Actor, requestId
       if (!approvals.some((approval) => approval.payableTermsJson !== terms)) {
         throw new ApiError(409, "APPROVAL_TERMS_CURRENT", "The payable terms have not changed");
       }
+      if (dryPreview && payment) {
+        await tx.payment.update({ where: { id: payment.id }, data: { status: "EXPIRED" } });
+        await tx.ledgerEntry.updateMany({ where: { invoiceId: invoice.id }, data: { paymentStatus: "EXPIRED" } });
+      }
+      await tx.livePaymentAttempt.updateMany({
+        where: { activeInvoiceId: invoice.id, handedOffAt: null },
+        data: { activeInvoiceId: null, status: "EXPIRED_UNEXPOSED" },
+      });
       await tx.invoice.update({
         where: { id: invoice.id },
         data: {
@@ -170,7 +181,8 @@ async function handleDecision(invoiceId: string, actor: Actor, requestId: string
     }
 
     await tx.approval.create({ data: { invoiceId: invoice.id, reviewerId: actor.id, decision, reason, idempotencyKey, payableTermsJson, approvalRound: invoice.approvalRound } });
-    const requiredApprovals = Math.max(1, invoice.requiredApprovals ?? 1);
+    const active = await tx.treasuryPolicy.findFirst({ where: { organizationId: actor.organizationId, active: true }, orderBy: { version: "desc" } });
+    const requiredApprovals = Math.max(active?.reviewerQuorum ?? 1, invoice.requiredApprovals ?? 1);
     const approvalsRecorded = await tx.approval.count({ where: { invoiceId: invoice.id, approvalRound: invoice.approvalRound, decision: "APPROVED" } });
     const status = decision === "APPROVED" && approvalsRecorded < requiredApprovals ? "REVIEW_REQUIRED" : decision;
     const eventType = status === "REVIEW_REQUIRED" ? "INVOICE_APPROVAL_RECORDED" : status === "APPROVED" ? "INVOICE_APPROVED" : "INVOICE_REJECTED";

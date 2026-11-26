@@ -145,6 +145,22 @@ try {
       stdio: ["pipe", "inherit", "inherit"],
     });
   }
+
+  const hasReconciliation = execFileSync("sqlite3", [databasePath, "PRAGMA table_info('LivePaymentAttempt');"], { encoding: "utf8" }).includes("nextCheckAt");
+  if (!hasReconciliation) {
+    execFileSync("sqlite3", ["-bail", databasePath], {
+      input: readFileSync(path.resolve("prisma/migrations/20261127000200_reconciliation/migration.sql"), "utf8"),
+      stdio: ["pipe", "inherit", "inherit"],
+    });
+  }
+
+  const hasReviewerQuorum = execFileSync("sqlite3", [databasePath, "PRAGMA table_info('TreasuryPolicy');"], { encoding: "utf8" }).includes("reviewerQuorum");
+  if (!hasReviewerQuorum) {
+    execFileSync("sqlite3", ["-bail", databasePath], {
+      input: readFileSync(path.resolve("prisma/migrations/20261127000300_reviewer_quorum/migration.sql"), "utf8"),
+      stdio: ["pipe", "inherit", "inherit"],
+    });
+  }
 } catch (error) {
   if (error instanceof Error && "code" in error && error.code === "ENOENT") {
     throw new Error("SQLite CLI not found. Install sqlite3 or use `npm run db:migrate:prisma`.");

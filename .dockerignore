@@ -1,0 +1,13 @@
+.git
+node_modules
+**/node_modules
+**/.next
+**/.next-browser
+**/dist
+**/*.tsbuildinfo
+**/.env
+**/.env.*
+**/*.db*
+test-results
+playwright-report
+prisma/postgresql/schema.prisma

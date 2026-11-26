@@ -32,7 +32,9 @@ export function summarizeAttempt(attempt: LivePaymentAttempt) {
     originDebitAtomic: attempt.originDebitAtomic, destinationAmountAtomic: attempt.destinationAmountAtomic,
     refundFeeAtomic: attempt.refundFeeAtomic, withdrawFeeAtomic: attempt.withdrawFeeAtomic,
     slippageBps: attempt.slippageBps, quoteExpiresAt: attempt.quoteExpiresAt, handedOffAt: attempt.handedOffAt,
-    fundingTxHash: attempt.fundingTxHash,
+    fundingTxHash: attempt.fundingTxHash, destinationTxHash: attempt.destinationTxHash,
+    reconcileIssue: attempt.reconcileIssue, settledAt: attempt.settledAt, fundedAt: attempt.fundedAt,
+    refundTxHash: attempt.refundTxHash, refundedAtomic: attempt.refundedAtomic,
   };
 }
 
@@ -66,7 +68,7 @@ async function authorizePayable(db: Prisma.TransactionClient, invoiceId: string,
   if (controls.policySnapshot.demoMode || controls.policy.decision === "BLOCK" || controls.vendorRisk.decision === "BLOCK") {
     throw new ApiError(409, "PAYMENT_BLOCKED", "The current policy or vendor risk blocks this payable");
   }
-  if (approvals.length < Math.max(1, invoice.requiredApprovals ?? 1, controls.policy.requiredApprovals, controls.vendorRisk.requiredApprovals)) {
+  if (approvals.length < Math.max(controls.policySnapshot.reviewerQuorum ?? 1, invoice.requiredApprovals ?? 1, controls.policy.requiredApprovals, controls.vendorRisk.requiredApprovals)) {
     throw new ApiError(409, "APPROVAL_TERMS_CHANGED", "The current payable needs fresh reviewer approval");
   }
   return { invoice, terms, termsJson, policy: controls.policySnapshot, approvedAt: approvals[0].createdAt };
@@ -205,7 +207,7 @@ export async function handoffLiveAttempt(attemptId: string, actor: Signer, sessi
     const exposure = await tx.livePaymentAttempt.findMany({
       where: { organizationId: actor.organizationId, sourceAsset: current.sourceAsset,
         reservedDebitAtomic: { not: null },
-        OR: [{ reservationDay }, { activeInvoiceId: { not: null } }],
+        OR: [{ reservationDay }, { activeInvoiceId: { not: null }, fundingTxHash: null }, { fundedAt: { gte: new Date(reservationDay + "T00:00:00Z") } }],
       },
       select: { reservedDebitAtomic: true },
     });
@@ -219,7 +221,7 @@ export async function handoffLiveAttempt(attemptId: string, actor: Signer, sessi
     });
     if (claimed.count !== 1) throw new ApiError(409, "APPROVAL_TERMS_CHANGED", "The invoice changed while reserving the debit");
     const attempt = await tx.livePaymentAttempt.update({ where: { id: current.id }, data: {
-      status: "AWAITING_FUNDING", handedOffAt: now, reservationDay, reservedDebitAtomic: current.originDebitAtomic,
+      status: "AWAITING_FUNDING", handedOffAt: now, nextCheckAt: now, reservationDay, reservedDebitAtomic: current.originDebitAtomic,
     } });
     const payment = await tx.payment.upsert({
       where: { invoiceId: current.invoiceId },
@@ -272,7 +274,7 @@ export async function confirmLiveFunding(attemptId: string, txHash: string, acto
     const existing = await tx.livePaymentAttempt.findUnique({ where: { fundingTxHash: txHash } });
     if (existing) throw new ApiError(409, "FUNDING_EVIDENCE_REUSED", "This origin transaction was already recorded");
     const updated = await tx.livePaymentAttempt.update({
-      where: { id: current.id }, data: { fundingTxHash: evidence.txHash, status: "FUNDING_CONFIRMED" },
+      where: { id: current.id }, data: { fundingTxHash: evidence.txHash, status: "FUNDING_CONFIRMED", fundedAt: new Date(), nextCheckAt: new Date() },
     });
     const payment = await tx.payment.update({
       where: { invoiceId: current.invoiceId },

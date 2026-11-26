@@ -49,6 +49,7 @@ async function createPolicyVersion(input: {
         allowedCurrenciesCsv: input.update.allowedCurrencies.join(","),
         allowedChainsCsv: input.update.allowedChains.join(","),
         allowedRecipientsCsv: input.update.allowedRecipients.join(","),
+        reviewerQuorum: input.update.reviewerQuorum ?? current.reviewerQuorum,
         requireApprovalAboveMinor: input.update.requireApprovalAboveMinor,
         blockUnknownRecipients: input.update.blockUnknownRecipients,
         warningsRequireManualReview: input.update.warningsRequireManualReview,

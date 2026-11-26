@@ -1,3 +1,4 @@
+import { reconcileDuePayments } from "../../apps/api/src/services/payments/reconciliation-worker.js";
 import { expect, it, vi } from "vitest";
 import { buildApp } from "../../apps/api/src/app.js";
 import { prisma } from "../../apps/api/src/db/prisma.js";
@@ -9,7 +10,7 @@ vi.mock("@defuse-protocol/one-click-sdk-typescript", async (importOriginal) => (
   verifyQuoteSignature: vi.fn((quote: { signature: string }) => quote.signature === "fixture-verified"),
 }));
 
-it("holds an exact-output debit once and carries unresolved exposure across UTC days", async () => {
+it.each(["settlement", "refund"] as const)("holds the reserved debit and reconciles %s only with final evidence", async (outcome) => {
   const webOrigin = "https://pilot.example";
   const recipient = "0x1111111111111111111111111111111111111111";
   const baseUsdc = "0x2222222222222222222222222222222222222222";
@@ -20,11 +21,13 @@ it("holds an exact-output debit once and carries unresolved exposure across UTC 
     PILOT_MAX_DEBIT_MINOR: "500", PILOT_NEAR_USDC_CONTRACT: sourceContract,
     PILOT_BASE_USDC_CONTRACT: baseUsdc, NEAR_INTENTS_ORIGIN_ASSET_ID: "near-usdc",
     NEAR_INTENTS_DESTINATION_ASSET_ID: "base-usdc",
-    NEAR_TREASURY_RPC_URL: "https://rpc.example",
+    NEAR_TREASURY_RPC_URL: "https://rpc.example", BASE_MAINNET_RPC_URL: "https://base.example",
+    PILOT_BASE_PAYOUT_SENDER: "0x3333333333333333333333333333333333333333",
   };
   for (const [key, value] of Object.entries(env)) vi.stubEnv(key, value);
   vi.stubEnv("NEAR_INTENTS_API_KEY", generateCredential());
   vi.stubEnv("PILOT_ENABLE_WALLET_HANDOFF", "false");
+  vi.stubEnv("PILOT_NEAR_REFUND_SENDER", "refund.near");
   const token = generateCredential();
   const reviewerToken = generateCredential();
   const sessionDigest = credentialDigest(token);
@@ -52,16 +55,49 @@ it("holds an exact-output debit once and carries unresolved exposure across UTC 
   }, include: { users: true, treasuryIdentities: true, policies: true } });
 
   const txHash = "11111111111111111111111111111111";
+  const refundHash = "22222222222222222222222222222222";
   let wrongEvidence = true;
   let quoteCount = 0;
   let validSignature = false;
+  let providerAvailable = false;
+  let payoutFinalized = false;
+  let firstValidQuote: object | undefined;
+  const payoutHash = "0x" + "b".repeat(64);
+  const payoutBlock = "0x" + "c".repeat(64);
   const mockFetch = vi.fn<typeof fetch>(async (url, request) => {
     if (String(url).endsWith("/tokens")) return Response.json([
       { assetId: "near-usdc", contractAddress: sourceContract, blockchain: "near", decimals: 6, symbol: "USDC" },
       { assetId: "base-usdc", contractAddress: baseUsdc, blockchain: "base", decimals: 6, symbol: "USDC" },
     ]);
+    if (String(url).includes("/status?")) {
+      expect(new URL(String(url)).searchParams.get("depositMemo")).toBe("memo");
+      if (!providerAvailable) return Response.json({}, { status: 503 });
+      if (outcome === "refund") return Response.json({ status: "REFUNDED", quoteResponse: firstValidQuote, swapDetails: {
+        depositedAmount: "5000000", refundedAmount: "4990000", nearTxHashes: [refundHash],
+        originChainTxHashes: [{ hash: txHash }],
+      } });
+      return Response.json({ status: "SUCCESS", quoteResponse: firstValidQuote, swapDetails: {
+        amountIn: "5000000", depositedAmount: "5000000", refundedAmount: "0",
+        originChainTxHashes: [{ hash: txHash }], destinationChainTxHashes: [{ hash: payoutHash }],
+      } });
+    }
     const body = JSON.parse(String(request?.body));
-    if (String(url).endsWith("/quote")) return Response.json({
+    if (String(url) === "https://base.example") {
+      if (body.method === "eth_chainId") return Response.json({ result: "0x2105" });
+      if (body.method === "eth_getBlockByNumber") return Response.json({ result: {
+        number: payoutFinalized ? "0xa" : "0x9", hash: payoutBlock,
+      } });
+      return Response.json({ result: {
+        transactionHash: payoutHash, blockNumber: "0xa", blockHash: payoutBlock, status: "0x1",
+        logs: [{ address: baseUsdc, data: "0x" + (4_000_000).toString(16).padStart(64, "0"), topics: [
+          "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef",
+          "0x" + env.PILOT_BASE_PAYOUT_SENDER.slice(2).padStart(64, "0"),
+          "0x" + recipient.slice(2).padStart(64, "0"),
+        ] }],
+      } });
+    }
+    if (String(url).endsWith("/quote")) {
+      const response = {
       signature: validSignature ? "fixture-verified" : "invalid",
       timestamp: new Date().toISOString(), quoteRequest: body,
       quote: {
@@ -69,8 +105,26 @@ it("holds an exact-output debit once and carries unresolved exposure across UTC 
         depositAddress: `deposit-${++quoteCount}.near`, depositMemo: "memo",
         deadline: body.deadline, refundFee: "10000", withdrawFee: "10000",
       },
-    });
+      };
+      if (validSignature) firstValidQuote ??= response;
+      return Response.json(response);
+    }
     if (body.method === "status") return Response.json({ result: { chain_id: "mainnet" } });
+    if (body.method === "tx" && body.params.tx_hash === refundHash) {
+      if (!payoutFinalized) return Response.json({ result: { final_execution_status: "EXECUTED" } });
+      const transfer = { receiver_id: "treasury.near", amount: "4990000" };
+      return Response.json({ result: {
+        final_execution_status: "FINAL", status: { SuccessValue: "" },
+        transaction: { hash: refundHash, signer_id: "refund.near", receiver_id: sourceContract,
+          actions: [{ FunctionCall: { method_name: "ft_transfer", deposit: "1", args: Buffer.from(JSON.stringify(transfer)).toString("base64") } }] },
+        receipts_outcome: [{ id: "refund-receipt", block_hash: "refund-block", outcome: {
+          executor_id: sourceContract, status: { SuccessValue: "" },
+          logs: ["EVENT_JSON:" + JSON.stringify({ standard: "nep141", version: "1.0.0", event: "ft_transfer",
+            data: [{ old_owner_id: "refund.near", new_owner_id: transfer.receiver_id, amount: transfer.amount }],
+          })],
+        } }],
+      } });
+    }
     if (body.method === "tx") {
       const transfer = { receiver_id: "deposit-2.near", amount: "5000000", memo: "memo" };
       return Response.json({ result: {
@@ -160,6 +214,27 @@ it("holds an exact-output debit once and carries unresolved exposure across UTC 
     expect(await prisma.auditEvent.count({ where: { invoiceId: invoices[0].id, eventType: "LIVE_ORIGIN_FUNDING_CONFIRMED" } })).toBe(1);
     expect(await prisma.livePaymentAttempt.count({ where: { organizationId: organization.id, handedOffAt: { not: null } } })).toBe(1);
     expect((await prisma.invoice.findUniqueOrThrow({ where: { id: invoices[0].id } })).status).toBe("PAYMENT_PENDING");
+    await reconcileDuePayments();
+    expect(await prisma.livePaymentAttempt.findUnique({ where: { id: attempt.id } })).toMatchObject({ reconcileIssue: "PROVIDER_STATUS_UNAVAILABLE", checkFailures: 1 });
+    providerAvailable = true;
+    await prisma.livePaymentAttempt.update({ where: { id: attempt.id }, data: { nextCheckAt: new Date(0) } });
+    await reconcileDuePayments();
+    expect(await prisma.livePaymentAttempt.findUnique({ where: { id: attempt.id } })).toMatchObject({ reconcileIssue: outcome === "settlement" ? "BASE_PAYOUT_NOT_FINAL" : "FUNDING_NOT_VERIFIED" });
+    expect((await prisma.invoice.findUniqueOrThrow({ where: { id: invoices[0].id } })).status).toBe("PAYMENT_PENDING");
+    payoutFinalized = true;
+    await prisma.livePaymentAttempt.update({ where: { id: attempt.id }, data: { nextCheckAt: new Date(0) } });
+    await reconcileDuePayments();
+    await reconcileDuePayments();
+    expect(await prisma.livePaymentAttempt.findUnique({ where: { id: attempt.id } })).toMatchObject({
+      ...(outcome === "settlement" ? { status: "SETTLED", destinationTxHash: payoutHash } : {
+        status: "REFUNDED", refundTxHash: refundHash, refundedAtomic: "4990000",
+      }), activeInvoiceId: null, nextCheckAt: null,
+    });
+    expect(await prisma.ledgerEntry.findUnique({ where: { invoiceId: invoices[0].id } })).toMatchObject({ paymentStatus: outcome === "settlement" ? "PAID" : "REFUNDED", transactionHash: txHash });
+    expect(await prisma.auditEvent.count({ where: { invoiceId: invoices[0].id, eventType: outcome === "settlement" ? "LIVE_BASE_DELIVERY_VERIFIED" : "LIVE_NEAR_REFUND_VERIFIED" } })).toBe(1);
+    const ledger = await app.inject({ method: "GET", url: "/api/ledger.csv", headers });
+    expect(ledger.body).toContain(outcome === "settlement" ? payoutHash : refundHash);
+
   } finally {
     await prisma.livePaymentAttempt.deleteMany({ where: { organizationId: organization.id } });
     await prisma.organization.delete({ where: { id: organization.id } });

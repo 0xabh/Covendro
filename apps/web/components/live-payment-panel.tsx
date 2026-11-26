@@ -7,7 +7,7 @@ import { apiBase, apiFetch } from "../lib/api";
 type Attempt = {
   id: string; status: string; originDebitAtomic: string; destinationAmountAtomic: string;
   quoteExpiresAt: string; sourceAccountId: string; sourceContract: string; destinationAddress: string; refundAccountId: string;
-  refundFeeAtomic?: string | null; withdrawFeeAtomic?: string | null; slippageBps: number; fundingTxHash?: string | null;
+  refundFeeAtomic?: string | null; withdrawFeeAtomic?: string | null; slippageBps: number; fundingTxHash?: string | null; destinationTxHash?: string | null; refundTxHash?: string | null; reconcileIssue?: string | null;
 };
 
 function formatUsdc(atomic: string) {
@@ -216,6 +216,9 @@ export function LivePaymentPanel({ invoiceId, canPrepare }: { invoiceId: string;
       <button disabled={working}>Verify funding</button>
     </form>}
     {attempt?.status === "FUNDING_CONFIRMED" && <p>NEAR funding confirmed. Awaiting Base settlement evidence.</p>}
+    {attempt?.reconcileIssue && <p role="status">{attempt.reconcileIssue.replaceAll("_", " ")}</p>}
+    {attempt?.destinationTxHash && <p className="hash-value">Base delivery: {attempt.destinationTxHash}</p>}
+    {attempt?.refundTxHash && <p className="hash-value">NEAR refund: {attempt.refundTxHash}</p>}
     {attempt?.fundingTxHash && <p className="hash-value">NEAR funding transaction: {attempt.fundingTxHash}</p>}
     {canPrepare && (!attempt || attempt.status === "PREPARED") && <button onClick={() => void prepare()} disabled={working}>{working ? "Preparing…" : attempt ? "Refresh quote" : "Prepare firm quote"}</button>}
     {error && <p role="alert">{error}</p>}

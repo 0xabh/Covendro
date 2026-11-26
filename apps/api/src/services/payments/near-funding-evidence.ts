@@ -77,7 +77,7 @@ export async function verifyNearFunding(input: {
       (args.data.memo ?? null) !== input.memo || !evidence || evidence.data.old_owner_id !== input.signerId ||
       evidence.data.new_owner_id !== input.recipient || evidence.data.amount !== input.amountAtomic ||
       (evidence.data.memo ?? null) !== input.memo) {
-    throw new ApiError(409, "FUNDING_EVIDENCE_MISMATCH", "The final transaction does not match the reserved token transfer");
+    throw new ApiError(409, "FUNDING_EVIDENCE_MISMATCH", "The final transaction does not match the expected token transfer");
   }
   return { txHash: input.txHash, receiptId: evidence.id, blockHash: evidence.blockHash, amountAtomic: input.amountAtomic };
 }

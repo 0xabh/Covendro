@@ -4,7 +4,7 @@ import { useParams } from "next/navigation";
 import { useEffect, useState } from "react";
 
 import { apiBase, apiFetch } from "../../../lib/api";
-type Payment = { id: string; status: string; quoteMode?: string | null; rail: string; quoteId?: string | null; providerStatus?: string | null; sourceAsset?: string | null; destinationAsset?: string | null; sourceChain?: string | null; destinationChain?: string | null; amountMinor: number; estimatedReceivedMinor?: number | null; slippageBps?: number | null; quoteExpiresAt?: string | null; refundDestination?: string | null; depositAddress?: string | null; depositMemo?: string | null; depositRequirementsJson?: string | null; transactionHash?: string | null; refundStatus?: string | null; invoice: { id: string; invoiceNumber: string; status: string; currency: string; vendor: { name: string } } };
+type Payment = { liveEvidence?: { destinationTxHash?: string; refundTxHash?: string; originDebitAtomic: string; destinationAmountAtomic: string; refundedAtomic?: string; reconcileIssue?: string }; id: string; status: string; quoteMode?: string | null; rail: string; quoteId?: string | null; providerStatus?: string | null; sourceAsset?: string | null; destinationAsset?: string | null; sourceChain?: string | null; destinationChain?: string | null; amountMinor: number; estimatedReceivedMinor?: number | null; slippageBps?: number | null; quoteExpiresAt?: string | null; refundDestination?: string | null; depositAddress?: string | null; depositMemo?: string | null; depositRequirementsJson?: string | null; transactionHash?: string | null; refundStatus?: string | null; invoice: { id: string; invoiceNumber: string; status: string; currency: string; vendor: { name: string } } };
 
 export default function PaymentDetailPage() {
   const params = useParams<{ id: string }>();
@@ -36,8 +36,16 @@ export default function PaymentDetailPage() {
       <div className="page-nav"><a href="/payments">← Payments</a><a href={`/invoices/${payment.invoice.id}`}>Open invoice</a></div>
       <section className="panel">
         <h2>NEAR mainnet funding</h2>
-        <p>{payment.transactionHash ? "Origin funding confirmed. Awaiting Base settlement evidence." : "Treasury debit reserved. Awaiting origin funding evidence."}</p>
-        {payment.transactionHash && <p className="hash-value">{payment.transactionHash}</p>}
+        <p>{payment.status === "PAID" ? "Finalized Base delivery verified." : payment.status === "REFUNDED" ? "Finalized NEAR refund verified." : payment.transactionHash ? "Origin funding confirmed. Awaiting reconciliation." : "Treasury debit reserved. Awaiting origin funding evidence."}</p>
+        {payment.transactionHash && <p className="hash-value">NEAR funding: {payment.transactionHash}</p>}
+        {payment.liveEvidence?.destinationTxHash && <p className="hash-value">Base delivery: {payment.liveEvidence.destinationTxHash}</p>}
+        {payment.liveEvidence?.refundTxHash && <p className="hash-value">NEAR refund: {payment.liveEvidence.refundTxHash}</p>}
+        {payment.liveEvidence?.reconcileIssue && <p role="status">{payment.liveEvidence.reconcileIssue.replaceAll("_", " ")}</p>}
+        {payment.liveEvidence && <dl className="detail-list">
+          <dt>Origin debit (USDC atomic units)</dt><dd>{payment.liveEvidence.originDebitAtomic}</dd>
+          <dt>Payable (USDC atomic units)</dt><dd>{payment.liveEvidence.destinationAmountAtomic}</dd>
+          <dt>Verified refund (USDC atomic units)</dt><dd>{payment.liveEvidence.refundedAtomic ?? "—"}</dd>
+        </dl>}
       </section>
     </main>;
   }
